@@ -1,5 +1,5 @@
 <div align="center">
-    <a href="https://github.com/mosait/MinbarLive" />
+    <a href="https://github.com/MinbarLive/MinbarLive" />
         <img alt="Logo" height="200px" src="./public/MinbarLive2.png">
     </a>
 </div>
@@ -59,7 +59,7 @@ Rough guide for an OpenAI setup (segmented mode, Arabic → German); Gemini (the
 
 ### Option A: Use the EXE (recommended)
 
-1. Download the latest EXE: [Click here](https://github.com/mosait/MinbarLive/releases)
+1. Download the latest EXE: [Click here](https://github.com/MinbarLive/MinbarLive/releases)
 2. Run `MinbarLive.exe`
 3. Follow the first-run wizard: interface language & appearance → spoken/subtitle language → microphone → AI provider & API key → disclaimer. Gemini API key tutorial: [EN](https://www.youtube.com/watch?v=Cl4XKgz6EJQ)/[DE](https://youtu.be/alNk5N-pv7Y), or create one directly at [aistudio.google.com/api-keys](https://aistudio.google.com/api-keys)
 4. It's Running!
@@ -71,7 +71,7 @@ Rough guide for an OpenAI setup (segmented mode, Arabic → German); Gemini (the
 ### Option B: Build it yourself (Python)
 
 ```bash
-git clone https://github.com/mosait/MinbarLive.git
+git clone https://github.com/MinbarLive/MinbarLive.git
 cd MinbarLive
 python -m venv .venv
 .\.venv\Scripts\activate      # Windows
@@ -148,7 +148,7 @@ API keys are **never** written there — they live in the OS keychain.
 
 ## Feedback
 
-- **GitHub Issues**: [Open an issue](https://github.com/mosait/MinbarLive/issues)
+- **GitHub Issues**: [Open an issue](https://github.com/MinbarLive/MinbarLive/issues)
 - **Google Forms**: [Submit feedback](https://forms.gle/T7hvU4yEbVRM4PmWA) anonymously
 
 ## Contributing

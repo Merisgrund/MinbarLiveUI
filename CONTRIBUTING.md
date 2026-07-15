@@ -6,7 +6,7 @@ Thank you for your interest in contributing to MinbarLive! Contributions are wel
 
 Before contributing, you might want to share feedback or report issues:
 
-- **GitHub Issues**: [Open an issue](https://github.com/mosait/MinbarLive/issues) for bugs or feature requests
+- **GitHub Issues**: [Open an issue](https://github.com/MinbarLive/MinbarLive/issues) for bugs or feature requests
 - **Google Forms**: [Submit feedback](https://forms.gle/T7hvU4yEbVRM4PmWA) anonymously
 
 ## How to Contribute
@@ -22,7 +22,7 @@ Before contributing, you might want to share feedback or report issues:
 
 ```bash
 # Clone the repo
-git clone https://github.com/mosait/MinbarLive.git
+git clone https://github.com/MinbarLive/MinbarLive.git
 cd MinbarLive
 
 # Create virtual environment
