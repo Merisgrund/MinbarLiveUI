@@ -51,6 +51,8 @@ Rough guide for an OpenAI setup (segmented mode, Arabic → German); Gemini (the
 
 ## Setup
 
+> 📧 **Need help setting up?** Write us an email at [minbar.live@outlook.com](mailto:minbar.live@outlook.com) and we'll help you with your first setup.
+
 ### Prerequisites
 
 - An API key for your AI provider — a **Google Gemini key is the simplest option**: one key covers translation, real-time transcription, and Quran verse matching. (OpenAI/Claude/Deepgram keys are only needed if you choose those providers; Claude has no speech-to-text, so it additionally needs a transcription key.)
@@ -150,6 +152,7 @@ API keys are **never** written there — they live in the OS keychain.
 
 - **GitHub Issues**: [Open an issue](https://github.com/MinbarLive/MinbarLive/issues)
 - **Google Forms**: [Submit feedback](https://forms.gle/T7hvU4yEbVRM4PmWA) anonymously
+- **Email**: [minbar.live@outlook.com](mailto:minbar.live@outlook.com)
 
 ## Contributing
 

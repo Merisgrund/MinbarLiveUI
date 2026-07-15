@@ -128,7 +128,7 @@
   .lang-switch button.active { background: var(--navy); color: #fff; }
 
   /* ---------- hero ---------- */
-  .hero { text-align: center; padding: 90px 24px 0; }
+  .hero { text-align: center; padding: 72px 24px 0; }
   .hero img.logo {
     height: 210px; width: auto; max-width: 90%;
     filter: drop-shadow(0 14px 34px rgba(29, 74, 107, 0.22));
@@ -136,7 +136,7 @@
   }
   .hero h1 {
     font-size: clamp(2rem, 5vw, 3.1rem); font-weight: 800; letter-spacing: -0.03em;
-    color: var(--navy-deep); line-height: 1.15; max-width: 780px; margin: 30px auto 0;
+    color: var(--navy-deep); line-height: 1.15; max-width: 780px; margin: 20px auto 0;
   }
   .hero p.lead {
     max-width: 660px; margin: 20px auto 0; font-size: 1.12rem; color: var(--ink-muted);
@@ -465,6 +465,11 @@
     </div>
 
     <div class="callout info">
+      <div class="icon">📧</div>
+      <p data-i18n="setup_help"><b>Hilfe bei der Einrichtung:</b> Du kommst nicht weiter? Schreib uns eine E-Mail an <a href="mailto:minbar.live@outlook.com">minbar.live@outlook.com</a>, wir helfen dir gerne bei der ersten Einrichtung.</p>
+    </div>
+
+    <div class="callout info">
       <div class="icon">💰</div>
       <p data-i18n="cost_note"><b>API-Kosten:</b> MinbarLive selbst ist kostenlos, nutzt aber deinen eigenen KI-API-Key. Eine Stunde Live-Übersetzung kostet ca. 0,50 $ (Arabisch → Deutsch). Tipp: Setze ein Nutzungslimit in deinem Anbieter-Konto.</p>
     </div>
@@ -590,6 +595,7 @@ const translations = {
     s4_text: "Start drücken und die Übersetzung läuft live auf dem Untertitelfenster.",
     smartscreen: "<b>Hinweis:</b> Beim ersten Start kann eine Windows-Warnung erscheinen, da die Datei nicht signiert ist. Das ist normal, die Datei über den offiziellen Link ist sicher. Einfach „Weitere Informationen“ → „Trotzdem ausführen“ wählen.",
     cost_note: "<b>API-Kosten:</b> MinbarLive selbst ist kostenlos, nutzt aber deinen eigenen KI-API-Key. Eine Stunde Live-Übersetzung kostet ca. 0,50 $ (Arabisch → Deutsch). Tipp: Setze ein Nutzungslimit in deinem Anbieter-Konto.",
+    setup_help: '<b>Hilfe bei der Einrichtung:</b> Du kommst nicht weiter? Schreib uns eine E-Mail an <a href="mailto:minbar.live@outlook.com">minbar.live@outlook.com</a>, wir helfen dir gerne bei der ersten Einrichtung.',
     links_title: "🔗 Alle Links",
     links_sub: "Download, Tutorials und nützliche Tools auf einen Blick.",
     l1_title: "Download",
@@ -657,6 +663,7 @@ const translations = {
     s4_text: "Press Start and the translation runs live on the subtitle window.",
     smartscreen: "<b>Note:</b> On first launch, Windows may show a warning because the file is not code-signed. This is normal, the file from the official link is safe. Just click “More info” → “Run anyway”.",
     cost_note: "<b>API costs:</b> MinbarLive itself is free, but uses your own AI API key. One hour of live translation costs about $0.50 (Arabic → German). Tip: set a usage limit in your provider account.",
+    setup_help: '<b>Setup help:</b> Stuck? Write us an email at <a href="mailto:minbar.live@outlook.com">minbar.live@outlook.com</a> and we\'ll gladly help you with your first setup.',
     links_title: "🔗 All Links",
     links_sub: "Download, tutorials, and useful tools at a glance.",
     l1_title: "Download",
