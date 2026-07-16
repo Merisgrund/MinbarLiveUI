@@ -26,11 +26,13 @@ import customtkinter as ctk
 from config import ICON_PATH, ICON_PATH_PNG
 from gui.device_list import get_input_devices
 from gui.dropdown import CustomDropdown
+from gui.scaling import apply_display_scaling
 from providers import (
     PROVIDER_CHOICES,
     get_default_model,
     get_stored_api_key,
     get_streaming_key_provider,
+    has_insecure_key_fallback,
     resolve_provider_by_keys,
     save_api_key,
 )
@@ -90,6 +92,11 @@ _LIGHT = {
 
 _W, _H = 680, 640
 
+# The wizard runs before the control panel and keeps CTk's default widget
+# scaling (the panel picks its own); this is the base the display clamp in
+# gui/scaling.py scales down from on a small high-DPI screen.
+_WIZARD_WIDGET_SCALE = 1.0
+
 # "Where do I get an API key?" video tutorials, per provider and GUI
 # language. Languages without their own link fall back to English.
 _KEY_HELP_LINKS: dict[str, dict[str, str]] = {
@@ -128,6 +135,11 @@ class OnboardingWizard(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
 
+        # Clamp the global CTk scaling before any geometry is set: this
+        # wizard is the tallest window in the app, so on a small high-DPI
+        # laptop it is the one that would run off the screen (gui/scaling).
+        apply_display_scaling(self, _WIZARD_WIDGET_SCALE)
+
         settings = load_settings()
         self._state = {
             "gui_language": settings.gui_language,
@@ -149,8 +161,12 @@ class OnboardingWizard(ctk.CTk):
         self.configure(fg_color=self._c["app_bg"])
         self.resizable(False, False)
         self.update_idletasks()
-        x = (self.winfo_screenwidth() - _W) // 2
-        y = (self.winfo_screenheight() - _H) // 2
+        # winfo_screen*() and the +x+y of geometry() are PHYSICAL px, while
+        # _W/_H are logical — centering has to compare like with like, or the
+        # window drifts further off-centre the higher the display scaling.
+        scaling = ctk.ScalingTracker.get_window_scaling(self)
+        x = (self.winfo_screenwidth() - int(_W * scaling)) // 2
+        y = (self.winfo_screenheight() - int(_H * scaling)) // 2
         self.geometry(f"{_W}x{_H}+{x}+{y}")
         self._set_icon()
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
@@ -801,18 +817,30 @@ class OnboardingWizard(ctk.CTk):
         # provider's key surfaces the insecure-storage warning (once) so several
         # keys don't stack dialogs.
         insecure = False
+        session_only = False
         for pid, key in self._state.get("provider_keys", {}).items():
             if not key:
                 continue
             stored = save_api_key(pid, key)
             if pid == provider and not stored:
-                insecure = True
-        if insecure:
+                # Without a keychain, OpenAI falls back to the plaintext
+                # settings file while every other provider keeps the key for
+                # this session only — two different warnings.
+                if has_insecure_key_fallback(pid):
+                    insecure = True
+                else:
+                    session_only = True
+        if insecure or session_only:
             messagebox.showwarning(
                 "MinbarLive",
                 self._t(
-                    "dlg_key_insecure_warning",
-                    "Keyring unavailable — key will be stored unencrypted.",
+                    "dlg_key_insecure_warning"
+                    if insecure
+                    else "dlg_key_saved_session_only",
+                    "Keyring unavailable — key will be stored unencrypted."
+                    if insecure
+                    else "No keyring available — the key works for this "
+                    "session only and must be entered again after a restart.",
                 ),
                 parent=self,
             )

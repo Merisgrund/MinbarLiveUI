@@ -27,6 +27,9 @@ from utils.settings import (
     TARGET_LANGUAGE_NAMES,
     Settings,
     get_source_language_code,
+    get_target_language_code,
+    language_canonical_name,
+    language_display_name,
     load_settings,
     save_settings,
 )
@@ -462,6 +465,52 @@ class TestRetentionSettings:
             assert loaded.auto_cleanup_content is False
         finally:
             settings_module._cached_settings = None
+
+
+class TestLanguageEndonyms:
+    """Dropdowns show the native endonym; the English name stays the canonical
+    key for settings storage, language codes, footer lookups and the
+    translation/summary prompts. Every dropdown must therefore convert on the
+    way in and on the way back out.
+    """
+
+    def test_every_target_language_round_trips(self):
+        for name in TARGET_LANGUAGE_NAMES:
+            shown = language_display_name(name)
+            assert language_canonical_name(shown) == name, (
+                f"{name!r} displays as {shown!r} but does not map back"
+            )
+
+    def test_every_source_language_round_trips(self):
+        for name, _code in SOURCE_LANGUAGES:
+            shown = language_display_name(name)
+            assert language_canonical_name(shown) == name
+
+    def test_canonical_names_pass_through_unchanged(self):
+        """A settings.json written before endonyms existed stores English
+        names — those must keep resolving."""
+        for legacy in ("German", "Arabic", "Turkish", "English"):
+            assert language_canonical_name(legacy) == legacy
+
+    def test_unknown_value_is_returned_as_is(self):
+        assert language_display_name("Klingon") == "Klingon"
+        assert language_canonical_name("Klingon") == "Klingon"
+
+    def test_automatic_is_not_translated(self):
+        """"Automatic" is a mode, not a language, so it keeps its label."""
+        assert language_display_name("Automatic") == "Automatic"
+        assert language_canonical_name("Automatic") == "Automatic"
+
+    def test_known_endonyms(self):
+        assert language_display_name("German") == "Deutsch"
+        assert language_display_name("Arabic") == "العربية"
+        assert language_display_name("Turkish") == "Türkçe"
+
+    def test_canonical_names_still_resolve_to_language_codes(self):
+        """The whole point of keeping English canonical: the code lookup and
+        every other keyed table must not see an endonym."""
+        assert get_target_language_code(language_canonical_name("Deutsch")) == "de"
+        assert get_source_language_code(language_canonical_name("العربية")) == "ar"
 
 
 if __name__ == "__main__":

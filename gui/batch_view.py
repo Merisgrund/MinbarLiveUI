@@ -20,6 +20,7 @@ import tkinter as tk
 
 import customtkinter as ctk
 
+from gui.scaling import centered_position
 from providers import (
     PROVIDER_CHOICES,
     TRANSCRIPTION_PROVIDER_CHOICES,
@@ -145,8 +146,7 @@ class BatchViewMixin:
         scaling = ctk.ScalingTracker.get_window_scaling(win)
         h = int(win.winfo_reqheight() / scaling) + 1
         if recenter:
-            x = self.winfo_rootx() + (self.winfo_width() - w) // 2
-            y = self.winfo_rooty() + (self.winfo_height() - h) // 2
+            x, y = centered_position(self, w, h)
         else:
             x = win.winfo_x()
             y = win.winfo_y()

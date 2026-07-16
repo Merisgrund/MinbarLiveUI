@@ -53,6 +53,7 @@
   "dlg_key_saved": "Çelësi API u ruajt.",
   "dlg_key_saved_insecure": "Çelësi API u ruajt (ruajtur në skedarin e cilësimeve, jo në keyring).",
   "dlg_key_insecure_warning": "Keyring nuk është i disponueshëm — çelësi do të ruhet i pakriptuar.",
+  "dlg_key_saved_session_only": "Nuk ka keyring të disponueshëm — çelësi vlen vetëm për këtë sesion dhe duhet të futet sërish pas rinisjes.",
   "dlg_key_empty": "Çelësi nuk mund të jetë bosh.",
   "dlg_remove_key_question": "Hiqni çelësin API të ruajtur?",
   "dlg_key_removed": "Çelësi API u hoq.",

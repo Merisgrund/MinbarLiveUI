@@ -15,6 +15,7 @@ import tkinter as tk
 
 import customtkinter as ctk
 
+from gui.scaling import centered_position
 from providers import PROVIDER_CHOICES, has_usable_key
 from utils.api_key_manager import remove_api_key
 from utils.logging import log
@@ -54,8 +55,7 @@ class SettingsViewMixin:
         win.after(200, lambda: self._set_toplevel_icon(win))
         win.transient(self)
         self.update_idletasks()
-        x = self.winfo_rootx() + (self.winfo_width() - 500) // 2
-        y = self.winfo_rooty() + (self.winfo_height() - 620) // 2
+        x, y = centered_position(self, 500, 620)
         win.geometry(f"500x620+{x}+{y}")
         self._settings_win = win
         self._settings_labels = []

@@ -10,7 +10,7 @@ Real-time translation system for mosque lectures and prayers, supporting multipl
 
 ## Overview
 
-This application captures live audio from a microphone, transcribes and translates the speech using AI models, and displays the translation as subtitles on a full-screen window (ideal for a second monitor, a projector, or an OBS overlay).
+This application captures live audio — from a microphone or directly from what your PC is playing — transcribes and translates the speech using AI models, and displays the translation as subtitles on a full-screen window (ideal for a second monitor, a projector, or an OBS overlay).
 
 By default it runs in **real-time streaming mode**: the spoken text appears word by word while the speaker talks, and the translation follows each finished utterance after ~1–3 seconds. You can choose your AI provider — **Google Gemini** (default), **OpenAI**, or **Anthropic Claude** — and a first-run setup wizard walks you through language, microphone, provider, and API key.
 
@@ -23,15 +23,18 @@ By default it runs in **real-time streaming mode**: the spoken text appears word
 - **Multiple AI providers**: translation via Google Gemini, OpenAI, or Anthropic Claude — switchable in the settings
 - **Verified Quran verse output**: RAG matching over precomputed verse embeddings; high-confidence matches display the exact published translation (marked 📖) instead of an AI paraphrase
 - Dictionary matching for Athan phrases
+- **System audio capture** (Windows): translate whatever is playing on the PC — a stream, a video call, a recording — by picking a `(Loopback)` device instead of a microphone. No virtual audio cable needed
+- **Noise filter**: a voice-activity gate drops static, hum and hiss before they reach the AI, so a noisy line can't be turned into invented sentences
 - **Bilingual subtitles**: optionally show the original text above the translation
 - Three subtitle modes: Realtime feed, continuous ticker, or static display
-- **Batch mode**: turn a pre-recorded audio/video file into an `.srt` subtitle file
+- **Batch mode**: turn a pre-recorded audio/video file into an `.srt` subtitle file (or a plain text transcript)
 - **Session history viewer** with AI-generated session summaries
 - **Islamic mode toggle**: switch off the Quran/Athan features to use MinbarLive as a general live translator
 - First-run setup wizard; control panel in 6 languages (DE, EN, AR, BS, SQ, TR); light & dark theme
 - Multi-monitor support with transparent overlay option
 - Secure API key storage using the OS keychain
 - Automatic silence detection, retries with exponential backoff, model fallback chains
+- **Cost guards**: silent segments are never sent to the API, and a forgotten session auto-stops after 10 minutes without speech
 
 📚 **More details:** See the [docs/](docs/) folder for architecture, providers, configuration, and data file documentation.
 
@@ -56,7 +59,7 @@ Rough guide for an OpenAI setup (segmented mode, Arabic → German); Gemini (the
 ### Prerequisites
 
 - An API key for your AI provider — a **Google Gemini key is the simplest option**: one key covers translation, real-time transcription, and Quran verse matching. (OpenAI/Claude/Deepgram keys are only needed if you choose those providers; Claude has no speech-to-text, so it additionally needs a transcription key.)
-- Audio input device (microphone)
+- An audio source: a microphone, or — on Windows — any output device captured via loopback (see [Audio Sources](#audio-sources))
 - Python 3.10+ (Option B only)
 
 ### Option A: Use the EXE (recommended)
@@ -89,7 +92,7 @@ Two windows will appear:
 - **Control Panel** - Start/Stop, settings, batch mode, history, API key management
 - **Subtitles** - Full-screen translated text display
 
-Press `Escape` to exit.
+Press `Escape` on the subtitle window to stop the translation (same as the Stop button). It leaves the window and the app open — close the control panel to quit.
 
 ## Real-time vs. Segmented Mode
 
@@ -102,6 +105,19 @@ The **Processing Strategy** dropdown in the control panel selects the pipeline:
 | **Semantic buffering** (Beta)     | Buffers segments until a complete sentence is detected                            | ~5–15 s                 |
 
 Real-time mode supports three transcription engines: **Google Gemini Live** (default — uses your existing Gemini key), **OpenAI Realtime**, and **Deepgram Nova**. Segmented mode transcribes via Gemini or OpenAI. See [docs/providers.md](docs/providers.md).
+
+## Audio Sources
+
+The **input device** dropdown lists two kinds of source:
+
+| Source                    | What it captures                                | Typical use                                             |
+| ------------------------- | ----------------------------------------------- | ------------------------------------------------------- |
+| A microphone              | What the mic hears                              | The khateeb's mic, a mixer output, an audio interface   |
+| `… (Loopback)` — Windows  | Whatever is **playing** on that output device   | A live stream, a video call, a recording on the same PC |
+
+Loopback entries are the PC's speakers/headphones captured via WASAPI, so you can translate audio that is only playing on the computer **without a virtual audio cable** (VB-CABLE and similar are no longer needed). They appear automatically, marked `(Loopback)`, and are selected exactly like a microphone.
+
+> **Mic quality matters more than any setting.** The AI engines need a healthy signal level: a very quiet input (a mic with the gain turned down) produces sporadic or missing transcripts, and no software setting can recover it. If recognition is poor, raise the input gain at the source (interface knob, Windows mic level) first. Loopback sources are digital and always at full level.
 
 ## Batch Mode: Subtitle Files from Recordings
 
@@ -135,7 +151,7 @@ Runtime files are written to a per-user app data folder:
 - **macOS**: `~/Library/Application Support/MinbarLive/`
 - **Linux**: `~/.local/share/MinbarLive/`
 
-API keys are **never** written there — they live in the OS keychain.
+API keys live in the **OS keychain**, not in `settings.json`. The one exception is a machine with no keychain backend at all (typically Linux without GNOME Keyring/KWallet): there an OpenAI key falls back to plaintext in `settings.json` — the app warns you when this happens — while other providers keep the key for that session only. Using an environment variable or `.env` avoids both. See [docs/providers.md](docs/providers.md#api-keys).
 
 ## Update Check
 

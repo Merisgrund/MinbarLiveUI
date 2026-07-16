@@ -539,6 +539,18 @@ def _client_module(provider: str):
     return importlib.import_module(f"providers.{provider}.client")
 
 
+def has_insecure_key_fallback(provider: str) -> bool:
+    """True if this provider still persists its key when no keychain exists.
+
+    Only OpenAI does, via the legacy plaintext settings-file fallback. Every
+    other provider's key is session-only in that case — it is gone after a
+    restart. save_api_key() returns False for both outcomes, so callers that
+    report the result to the user need this to tell "saved, but in plaintext"
+    apart from "not saved at all".
+    """
+    return provider == "openai"
+
+
 def get_stored_api_key(provider: str) -> str | None:
     """A provider's persisted key (keychain, legacy file, or environment)."""
     import os

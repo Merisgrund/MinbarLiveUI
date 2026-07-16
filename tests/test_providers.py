@@ -1724,5 +1724,32 @@ class TestGeminiLiveTranscriptionProvider:
         assert "stream ended by server" in str(errors[0])
 
 
+class TestInsecureKeyFallback:
+    """save_api_key() returns False both when a key lands in the plaintext
+    settings file (OpenAI's legacy fallback) and when it is not persisted at
+    all (every other provider). The GUI must tell those apart, or it reports
+    "saved" for a key that is gone after the next restart.
+    """
+
+    def test_only_openai_persists_without_a_keychain(self):
+        assert providers.has_insecure_key_fallback("openai") is True
+        for provider in ("gemini", "anthropic", "deepgram"):
+            assert providers.has_insecure_key_fallback(provider) is False
+
+    def test_unknown_provider_has_no_fallback(self):
+        assert providers.has_insecure_key_fallback("nonexistent") is False
+
+    def test_save_reports_not_secure_without_a_keychain(self, monkeypatch):
+        """Guards the premise: with no keyring backend every provider reports
+        an insecure save, which is why has_insecure_key_fallback is needed to
+        pick the right warning."""
+        monkeypatch.setattr(
+            "utils.keyring_storage._check_keyring_available", lambda: False
+        )
+        monkeypatch.setattr(providers, "_client_module", lambda p: MagicMock())
+        for provider in ("gemini", "anthropic", "deepgram"):
+            assert providers.save_api_key(provider, "k-123") is False
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

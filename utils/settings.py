@@ -145,10 +145,9 @@ def language_canonical_name(display: str) -> str:
     return _ENDONYM_TO_CANONICAL.get(display, display)
 
 
-# Endonym display lists in the same order as the canonical lists.
-SOURCE_LANGUAGE_DISPLAY_NAMES = [
-    language_display_name(name) for name, _ in SOURCE_LANGUAGES
-]
+# Endonym display list in the same order as the canonical list. (The source
+# dropdowns filter their entries per pipeline mode, so they map
+# language_display_name() over their own filtered list instead.)
 TARGET_LANGUAGE_DISPLAY_NAMES = [
     language_display_name(name) for name in TARGET_LANGUAGE_NAMES
 ]
@@ -265,9 +264,6 @@ SUBTITLE_MODES = [
     SUBTITLE_MODE_CONTINUOUS,
     SUBTITLE_MODE_STATIC,
 ]
-
-# Processing strategies
-PROCESSING_STRATEGIES = ["chunk", "semantic"]
 
 # Pipeline modes: "segmented" is the default fixed-length-segment pipeline
 # above (chunk/semantic buffering both apply); "streaming" is the opt-in

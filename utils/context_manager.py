@@ -81,7 +81,17 @@ class ContextManager:
         self._thread: threading.Thread | None = None
 
     def start(self):
-        """Start the background summarization thread."""
+        """Start the background summarization thread.
+
+        Idempotent: a second start() without a stop() would orphan the first
+        thread (self._thread is the only handle stop() joins) and leave two
+        loops summarizing the same state — duplicate API calls. A start that
+        fails partway through (e.g. the streaming connection raises after
+        this call) therefore cannot leak a summarizer either.
+        """
+        if self._thread is not None and self._thread.is_alive():
+            log("ContextManager already running", level="DEBUG")
+            return
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._summarization_loop, daemon=True, name="context-summarizer"

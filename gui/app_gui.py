@@ -14,9 +14,20 @@ from config import (
     ICON_PATH_PNG,
 )
 from gui.batch_view import BatchViewMixin
+from gui.control_state import (
+    STRATEGY_IDS,
+    apply_strategy,
+    current_strategy_index,
+    effective_subtitle_mode,
+    repair_default_provider,
+    required_key_providers,
+    subtitle_mode_choices,
+    visible_provider_choices,
+)
 from gui.device_list import get_input_devices
 from gui.dropdown import CustomDropdown
 from gui.history_view import HistoryViewMixin
+from gui.scaling import apply_display_scaling
 from gui.settings_view import SettingsViewMixin
 from gui.subtitle_window import SubtitleWindow
 from gui.widgets import WidgetFactoryMixin
@@ -28,7 +39,6 @@ from providers import (
     get_stored_api_key,
     get_streaming_key_provider,
     has_usable_key,
-    resolve_provider_by_keys,
 )
 from providers.openai.client import set_api_key
 from utils.api_key_manager import (
@@ -51,7 +61,6 @@ from utils.settings import (
     SUBTITLE_MODE_CONTINUOUS,
     SUBTITLE_MODE_REALTIME,
     SUBTITLE_MODE_STATIC,
-    SUBTITLE_MODES,
     TARGET_LANGUAGE_DISPLAY_NAMES,
     TARGET_LANGUAGE_NAMES,
     language_canonical_name,
@@ -149,6 +158,11 @@ class AppGUI(
             ctk.set_widget_scaling(self._responsive_scale)
 
         super().__init__()
+
+        # The root exists now, so its monitor's DPI is known: clamp the global
+        # scaling if this screen is too small for the design (see gui/scaling).
+        # Must precede _setup_window() — geometry/minsize are scaled by it.
+        self._responsive_scale = apply_display_scaling(self, self._responsive_scale)
 
         self.controller = controller
         self.gui_lang_code = self._saved_settings.gui_language or DEFAULT_GUI_LANGUAGE
@@ -909,7 +923,7 @@ class AppGUI(
         # Master switch. "realtime" => streaming (pipeline_mode streaming);
         # "semantic"/"chunk" => segmented buffering. Real-time is first and the
         # fresh-install default; semantic precedes chunk (better rote Linie).
-        self._strategy_ids = ["realtime", "semantic", "chunk"]
+        self._strategy_ids = list(STRATEGY_IDS)
         self._strategy_display_names = self._strategy_labels()
         self.strategy_combo = self._combo(
             strat_combo_row,
@@ -1491,20 +1505,7 @@ class AppGUI(
         )
 
     def _required_key_providers(self) -> list[str]:
-        """Providers that must have a key before the pipeline can start:
-        the translation LLM and the transcription engine (de-duplicated).
-        Streaming engine ids map to the provider whose key they authenticate
-        with (openai_realtime → openai) — keys are per provider, never per
-        strategy, so an existing OpenAI key must never be re-prompted just
-        because real-time mode is selected."""
-        providers: list[str] = []
-        for provider in (
-            self._saved_settings.ai_provider,
-            get_streaming_key_provider(self._saved_settings.transcription_provider),
-        ):
-            if provider and provider not in providers:
-                providers.append(provider)
-        return providers
+        return required_key_providers(self._saved_settings)
 
     def on_start(self) -> None:
         # Prompt for any missing key; if the user dismisses the dialog the app
@@ -1773,26 +1774,10 @@ class AppGUI(
         self._on_language_change()
 
     def _subtitle_mode_choices(self) -> list[str]:
-        """Modes offered in the Subtitles dropdown. Realtime (the live feed
-        with the in-progress transcript line) is streaming-only."""
-        if self._saved_settings.pipeline_mode == PIPELINE_MODE_STREAMING:
-            return list(SUBTITLE_MODES)
-        return [m for m in SUBTITLE_MODES if m != SUBTITLE_MODE_REALTIME]
+        return subtitle_mode_choices(self._saved_settings)
 
     def _effective_subtitle_mode(self) -> str:
-        """The display mode the subtitle window should actually use.
-
-        A stored Realtime mode falls back to continuous under a segmented
-        strategy (the stored value is untouched — Realtime returns the
-        moment streaming is re-selected).
-        """
-        mode = self._saved_settings.subtitle_mode
-        if (
-            mode == SUBTITLE_MODE_REALTIME
-            and self._saved_settings.pipeline_mode != PIPELINE_MODE_STREAMING
-        ):
-            return SUBTITLE_MODE_CONTINUOUS
-        return mode
+        return effective_subtitle_mode(self._saved_settings)
 
     def _refresh_subtitle_mode_combo(self) -> None:
         """Rebuild the Subtitles dropdown for the current strategy and select
@@ -2081,34 +2066,12 @@ class AppGUI(
         ]
 
     def _current_strategy_index(self) -> int:
-        """Which Processing Strategy entry reflects the current settings."""
-        if (
-            self._saved_settings.transcription_provider
-            in STREAMING_TRANSCRIPTION_PROVIDERS
-        ):
-            return 0  # real-time
-        strat = self._saved_settings.processing_strategy
-        if strat in self._strategy_ids:
-            return self._strategy_ids.index(strat)
-        return self._strategy_ids.index("chunk")  # segmented default
+        return current_strategy_index(self._saved_settings)
 
     def _visible_provider_choices(
         self, choices: list[tuple[str, str]]
     ) -> list[tuple[str, str]]:
-        """While the pipeline is RUNNING, only providers with a saved key are
-        offered — switching to a keyless provider mid-run would break the
-        pipeline (it re-reads the provider per translation / audio segment).
-        Stopped, all are shown so the user can pick one and add its key. Never
-        empty: the active provider always has a key (required at start)."""
-        if not self._running:
-            return list(choices)
-        # Streaming engines authenticate with another provider's key
-        # (openai_realtime uses the OpenAI key); the mapping is the identity
-        # for every other id.
-        keyed = [
-            (n, p) for n, p in choices if has_usable_key(get_streaming_key_provider(p))
-        ]
-        return keyed or list(choices)
+        return visible_provider_choices(choices, self._running)
 
     def _refresh_provider_combos(self) -> None:
         """Re-filter BOTH provider dropdowns for the current running state
@@ -2196,30 +2159,10 @@ class AppGUI(
         transcription engine to a streaming one (the default is Deepgram, kept
         if one is already selected); chunk/semantic switch back to a segmented
         engine."""
-        if not (0 <= index < len(self._strategy_ids)):
+        sel = apply_strategy(self._saved_settings, index)
+        if sel is None:
             return
-        sel = self._strategy_ids[index]
-        if sel == "realtime":
-            if (
-                self._saved_settings.transcription_provider
-                not in STREAMING_TRANSCRIPTION_PROVIDERS
-            ):
-                self._saved_settings.transcription_provider = (
-                    DEFAULT_STREAMING_TRANSCRIPTION_PROVIDER
-                )
-            self._saved_settings.pipeline_mode = PIPELINE_MODE_STREAMING
-            log("Processing strategy: real-time streaming", level="INFO")
-        else:
-            self._saved_settings.processing_strategy = sel
-            self._saved_settings.pipeline_mode = PIPELINE_MODE_SEGMENTED
-            if (
-                self._saved_settings.transcription_provider
-                in STREAMING_TRANSCRIPTION_PROVIDERS
-            ):
-                self._saved_settings.transcription_provider = (
-                    DEFAULT_SEGMENTED_TRANSCRIPTION_PROVIDER
-                )
-            log(f"Processing strategy: {sel}", level="INFO")
+        log(f"Processing strategy: {sel}", level="INFO")
         self._refresh_transcription_provider_combo()
         self._refresh_transcription_model_combo(reset_default=True)
         self._refresh_source_language_combo()
@@ -2410,27 +2353,15 @@ class AppGUI(
             self._save_current_settings()
 
     def _repair_default_provider(self) -> None:
-        """Repair a stored "Use default" + non-default translation provider.
-
-        Early onboarding wrote the last-BROWSED provider as ai_provider even
-        when no key was ever entered for it; the provider dropdown is disabled
-        while "Use default" is on, so the GUI itself can never produce (or
-        leave) that state. Keys decide, mirroring onboarding: the default
-        provider wins when its key exists or none is stored at all; otherwise
-        the highest-ranked keyed provider is kept with "Use default" off.
-        Runs before any widgets exist.
-        """
+        """Persist and log a provider-default repair. Runs before any widgets
+        exist; the rule itself lives in gui/control_state.py."""
         s = self._saved_settings
-        if not s.use_default_translation_model or s.ai_provider == DEFAULT_AI_PROVIDER:
+        stale = repair_default_provider(s)
+        if stale is None:
             return
-        stale = s.ai_provider
-        provider = resolve_provider_by_keys()
-        s.ai_provider = provider
-        s.translation_model = get_default_model(provider, "translation")
-        s.use_default_translation_model = provider == DEFAULT_AI_PROVIDER
         save_settings(s)
         log(
-            f"Repaired inconsistent provider default: {stale} -> {provider} "
+            f"Repaired inconsistent provider default: {stale} -> {s.ai_provider} "
             f"(use default: {s.use_default_translation_model})",
             level="INFO",
         )

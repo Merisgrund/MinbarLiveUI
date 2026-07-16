@@ -1,5 +1,6 @@
 """Tests for ContextManager."""
 
+import threading
 import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -103,6 +104,49 @@ class TestContextManager:
 
         mgr.stop(timeout=1.0)
         assert mgr._thread is None
+
+    @patch("utils.context_manager.get_translation_provider")
+    def test_start_is_idempotent(self, mock_get_provider):
+        """A second start() must not orphan the first summarizer thread.
+
+        stop() only joins self._thread, so replacing it would leave the first
+        loop running against the same state — two summarizers, duplicate API
+        calls. A start() that fails partway (streaming connect raising after
+        the context manager started) relies on this too.
+        """
+        mgr = ContextManager()
+        try:
+            mgr.start()
+            first = mgr._thread
+
+            mgr.start()
+            assert mgr._thread is first, "second start() replaced the thread"
+
+            alive = [
+                t
+                for t in threading.enumerate()
+                if t.name == "context-summarizer" and t.is_alive()
+            ]
+            assert len(alive) == 1, f"expected 1 summarizer thread, got {len(alive)}"
+        finally:
+            mgr.stop(timeout=1.0)
+        assert mgr._thread is None
+
+    @patch("utils.context_manager.get_translation_provider")
+    def test_start_after_stop_starts_a_new_thread(self, mock_get_provider):
+        """The idempotence guard must not block a legitimate restart."""
+        mgr = ContextManager()
+        mgr.start()
+        first = mgr._thread
+        mgr.stop(timeout=1.0)
+
+        mgr.start()
+        try:
+            assert mgr._thread is not None
+            assert mgr._thread is not first
+            assert mgr._thread.is_alive()
+        finally:
+            mgr.stop(timeout=1.0)
 
     def test_context_format_structure(self):
         """Context should have proper structure with sections."""

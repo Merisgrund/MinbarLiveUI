@@ -21,6 +21,10 @@ LATEST_RELEASE_API_URL = (
 )
 RELEASES_PAGE_URL = "https://github.com/MinbarLive/MinbarLive/releases/latest"
 
+# Any html_url we are willing to open in the user's browser must start with
+# this — see fetch_latest_release.
+_RELEASE_URL_PREFIX = "https://github.com/MinbarLive/MinbarLive/releases/"
+
 _TIMEOUT_SECONDS = 10
 
 
@@ -79,8 +83,11 @@ def fetch_latest_release() -> tuple[str, str] | None:
     tag = data.get("tag_name") if isinstance(data, dict) else None
     if not isinstance(tag, str) or not tag:
         return None
+    # The banner hands this straight to webbrowser.open(), so only accept a
+    # real release page on github.com — never an arbitrary scheme or host out
+    # of the response body.
     url = data.get("html_url")
-    if not isinstance(url, str) or not url:
+    if not isinstance(url, str) or not url.startswith(_RELEASE_URL_PREFIX):
         url = RELEASES_PAGE_URL
     return tag, url
 

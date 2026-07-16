@@ -23,6 +23,8 @@
 │
 ├── audio/                   # Audio capture and processing
 │   ├── capture.py           # Ring buffer, silence detection
+│   ├── loopback.py          # Registry of WASAPI loopback (system-audio) devices
+│   ├── vad.py               # webrtcvad noise gate: has_speech + StreamNoiseGate
 │   └── writer.py            # Async WAV segment writing
 │
 ├── translation/             # Translation pipeline
@@ -33,12 +35,14 @@
 │   └── translator.py        # Translation: same-language bypass, verified-verse bypass,
 │                            #   RAG hints, code-switching prompt, Islamic/general mode
 │
-├── batch/                   # Batch mode: file → SRT
+├── batch/                   # Batch mode: file → SRT / text
 │   ├── processor.py         # VAD-style segmentation, ffmpeg conversion, pipeline run
-│   └── srt_writer.py        # SRT output (UTF-8 BOM)
+│   ├── srt_writer.py        # SRT output (UTF-8 BOM)
+│   └── text_writer.py       # Plain transcript + translation export (output format txt/both)
 │
 ├── gui/                     # User interface (CustomTkinter)
 │   ├── app_gui.py           # Control panel core (cards, start/stop, queue polling, theming)
+│   ├── control_state.py     # Settings-derived rules (key/mode/strategy) — Tk-free, unit-tested
 │   ├── widgets.py           # Widget factory mixin: themed dialogs, cards, buttons
 │   ├── settings_view.py     # Settings window + per-provider API key management
 │   ├── batch_view.py        # Batch/File window (file picker, progress, ffmpeg download)
@@ -46,7 +50,8 @@
 │   ├── onboarding.py        # First-run setup wizard (5 steps)
 │   ├── subtitle_window.py   # Full-screen subtitle display (realtime/continuous/static)
 │   ├── dropdown.py          # Shared themed dropdown
-│   └── device_list.py       # Audio input device enumeration
+│   ├── scaling.py           # Display-scaling clamp + centering (fits small high-DPI screens)
+│   └── device_list.py       # Audio input device enumeration (mics + WASAPI loopback)
 │
 ├── utils/                   # Utilities
 │   ├── api_key_manager.py   # API key dialogs (provider-aware)
@@ -55,12 +60,14 @@
 │   ├── context_manager.py   # Adaptive context with async summarization
 │   ├── ffmpeg_download.py   # One-time ffmpeg download for batch mode (Windows)
 │   ├── history.py           # Transcription/translation logging + history parsing
+│   ├── icons.py             # Shared window-icon helpers (ICO on Windows, scaled PNG elsewhere)
 │   ├── json_helpers.py      # JSON file I/O
 │   ├── keyring_storage.py   # OS keychain (one entry per provider)
 │   ├── logging.py           # Thread-safe logging
 │   ├── retry.py             # Exponential backoff for API calls
 │   ├── session_summary.py   # AI session summaries (history viewer)
 │   ├── settings.py          # User preferences dataclass + model/provider lists
+│   ├── update_check.py      # Anonymous startup check for a newer GitHub release
 │   └── user_messages.py     # Audience-facing status messages in the target language
 │
 ├── data/                            # Static data files (see docs/data-files.md)
@@ -83,7 +90,7 @@
 │
 ├── docs/                    # This documentation + the GitHub Pages landing page (index.html)
 │
-└── tests/                   # Pytest suite (400+ tests) — see docs/testing.md
+└── tests/                   # Pytest suite (679 tests) — see docs/testing.md
 ```
 
 ## Runtime Files
@@ -103,4 +110,4 @@ Contents:
 - `bin/` - ffmpeg, if downloaded via the batch card (Windows)
 - `settings.json` - All user preferences (NOT the API keys)
 
-> **Note:** API keys are stored securely in your OS keychain, not in settings.json.
+> **Note:** API keys are stored in your OS keychain, not in settings.json. The one exception is a machine with no keychain backend at all — see [providers.md](providers.md#api-keys).

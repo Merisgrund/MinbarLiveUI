@@ -112,15 +112,34 @@ class TestFetchLatestRelease:
         _fake_urlopen({"tag_name": "v9.9.9"}, monkeypatch)
         assert fetch_latest_release() == ("v9.9.9", update_check.RELEASES_PAGE_URL)
 
+    @pytest.mark.parametrize(
+        "hostile_url",
+        [
+            "javascript:alert(1)",
+            "file:///C:/Windows/System32/calc.exe",
+            "https://evil.example.com/releases/",
+            "https://github.com.evil.test/MinbarLive/MinbarLive/releases/",
+            "http://github.com/MinbarLive/MinbarLive/releases/tag/v9",  # not https
+        ],
+    )
+    def test_non_release_url_falls_back_to_releases_page(
+        self, hostile_url, monkeypatch
+    ):
+        """The banner opens this URL in a browser, so anything that is not a
+        real release page must never be handed through."""
+        _fake_urlopen({"tag_name": "v9.9.9", "html_url": hostile_url}, monkeypatch)
+        assert fetch_latest_release() == ("v9.9.9", update_check.RELEASES_PAGE_URL)
+
 
 class TestCheckForUpdate:
     def test_newer_release_returns_info(self, monkeypatch):
+        release_url = "https://github.com/MinbarLive/MinbarLive/releases/tag/v999.0.0"
         _fake_urlopen(
-            {"tag_name": "v999.0.0", "html_url": "https://example.com/rel"},
+            {"tag_name": "v999.0.0", "html_url": release_url},
             monkeypatch,
         )
         info = check_for_update()
-        assert info == UpdateInfo(version="999.0.0", url="https://example.com/rel")
+        assert info == UpdateInfo(version="999.0.0", url=release_url)
 
     def test_current_release_returns_none(self, monkeypatch):
         from version import __version__

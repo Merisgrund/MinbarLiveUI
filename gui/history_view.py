@@ -15,6 +15,7 @@ import threading
 
 import customtkinter as ctk
 
+from gui.scaling import centered_position
 from providers import PROVIDER_CHOICES, has_usable_key
 from utils.history import (
     BatchRun,
@@ -32,7 +33,11 @@ from utils.history import (
     write_summary,
 )
 from utils.logging import log
-from utils.settings import TARGET_LANGUAGE_NAMES
+from utils.settings import (
+    TARGET_LANGUAGE_NAMES,
+    language_canonical_name,
+    language_display_name,
+)
 
 
 class HistoryViewMixin:
@@ -64,8 +69,7 @@ class HistoryViewMixin:
         win.after(200, lambda: self._set_toplevel_icon(win))
         win.transient(self)
         self.update_idletasks()
-        x = self.winfo_rootx() + (self.winfo_width() - 900) // 2
-        y = self.winfo_rooty() + (self.winfo_height() - 560) // 2
+        x, y = centered_position(self, 900, 560)
         win.geometry(f"900x560+{x}+{y}")
         self._history_win = win
         self._history_active_tab = initial_tab
@@ -801,18 +805,22 @@ class HistoryViewMixin:
             font=ctk.CTkFont(family="Segoe UI", size=13),
             text_color=self._colors["text"],
         ).grid(row=0, column=0, sticky="w")
+        # Native endonyms in the dropdown, canonical English names everywhere
+        # else (storage + the summary prompt) — same split as the language
+        # dropdowns in the control panel and the wizard.
         self._summary_language_combo = self._combo(
-            lang_col, values=list(TARGET_LANGUAGE_NAMES), register=False
+            lang_col,
+            values=[language_display_name(n) for n in TARGET_LANGUAGE_NAMES],
+            register=False,
         )
         self._summary_language_combo.grid(row=1, column=0, sticky="ew", pady=(4, 0))
-        last_lang = (
+        last_lang = language_canonical_name(
             self._saved_settings.last_summary_language
             or self._saved_settings.target_language
         )
-        if last_lang in TARGET_LANGUAGE_NAMES:
-            self._summary_language_combo.set(last_lang)
-        else:
-            self._summary_language_combo.set(self._saved_settings.target_language)
+        if last_lang not in TARGET_LANGUAGE_NAMES:
+            last_lang = self._saved_settings.target_language
+        self._summary_language_combo.set(language_display_name(last_lang))
 
         self._summary_generate_btn = ctk.CTkButton(
             win,
@@ -908,7 +916,9 @@ class HistoryViewMixin:
         if idx is None or not (0 <= idx < len(self._summary_provider_ids)):
             return
         provider_id = self._summary_provider_ids[idx]
-        language = self._summary_language_combo.get()
+        # The dropdown shows the endonym; the prompt and the stored preference
+        # take the canonical English name.
+        language = language_canonical_name(self._summary_language_combo.get())
 
         if not has_usable_key(provider_id):
             self._prompt_provider_key(provider_id)

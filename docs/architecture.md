@@ -50,21 +50,24 @@ The Processing Strategy setting selects one of two pipelines:
 
 ### Streaming pipeline (default: "Real-time streaming")
 
-1. Microphone audio is fed as small PCM chunks into a live connection to the streaming engine (OpenAI Realtime, Gemini Live, or Deepgram)
+1. Audio (microphone or system loopback) is fed as small PCM chunks into a live connection to the streaming engine (Gemini Live, OpenAI Realtime, or Deepgram). With the noise filter on, sustained non-speech is replaced by **digital silence of the same length** — the connection's timing and endpointing stay intact
 2. The engine sends back **interim transcripts** (word by word, self-correcting) and marks **utterance ends** on natural pauses
 3. The live transcript line is shown on the subtitle window while the speaker talks (Realtime subtitle mode)
-4. Each finished utterance goes through the full translation step (Athan matching, Quran RAG, context, LLM)
-5. The settled translation replaces the live line; typical speech → subtitle latency is ~1–3 s
-6. An utterance that never pauses is force-flushed after 12 s so latency stays bounded
+4. Very short utterances are **coalesced**: a 1–3 word fragment from a rhetorical pause is held briefly and merged with the next one, so the LLM translates a whole clause instead of an isolated word (and one API call is saved per fragment)
+5. Each finished utterance goes through the full translation step (Athan matching, Quran RAG, context, LLM)
+6. The settled translation replaces the live line; typical speech → subtitle latency is ~1–3 s
+7. An utterance that never pauses is force-flushed after 12 s so latency stays bounded
+8. If the connection drops, a supervisor thread **reconnects with exponential backoff** (1 s → 30 s) until Stop; the audience sees one connection message per outage, and the first transcript after recovery clears it
 
 ### Segmented pipeline ("Chunk-based" / "Semantic buffering")
 
-1. **Audio Capture** records into a ring buffer; 12 s segments with 3 s overlap are written as WAV (silent segments are skipped entirely)
+1. **Audio Capture** records into a ring buffer; 12 s segments with 3 s overlap are written as WAV (silent segments are skipped entirely, and with the noise filter on, loud-but-speechless segments are dropped before any API call)
 2. **Transcription** converts each segment to text via the configured provider, walking a model fallback chain on errors
-3. The **buffering strategy** groups transcriptions:
+3. **Overlap dedup + fragment gate**: consecutive segments overlap by 3 s, so each transcription repeats the tail of the previous one — the repeated prefix is stripped (fuzzy-matched, since the model transcribes the overlap slightly differently each pass). A residual with fewer than 3 letters is dropped rather than translated
+4. The **buffering strategy** groups transcriptions:
    - **Chunk-based** (segmented default): every segment is translated immediately (~4–14 s latency)
    - **Semantic buffering** (Beta): waits for sentence-ending punctuation before translating; flushes anyway after 3 segments or 10 s, and a stale buffer is flushed during silence. The sentence heuristics are Arabic-tuned.
-4. The grouped text goes through the same translation step as above
+5. The grouped text goes through the same translation step as above
 
 ## Translation Step
 
@@ -89,7 +92,7 @@ For non-Arabic source languages, the segmented and batch pipelines run a **secon
 For long sessions (1-4+ hours), the app uses intelligent context management:
 
 - **Recent segments (last 3)**: Kept raw for immediate disambiguation
-- **Rolling summary**: Updated every ~10 segments (async, no delay)
+- **Rolling summary**: Updated when ≥10 segments are pending **and** ≥3 minutes have passed since the last summary (async, no delay). Both conditions must hold — streaming utterances arrive every few seconds, so the count alone burned an LLM call on near-identical text every ~45 s
 - **Hourly summaries**: Long-term context compressed to ~20 words each
 
 This keeps context under ~1500 tokens while maintaining session continuity.
@@ -116,6 +119,29 @@ The context helps disambiguate unclear words without bloating the prompt.
 - Each segment's transcription is prompted with the previous segment's tail for cross-segment context
 - Timestamps come from the segment positions; output lands next to the source as `{name}.{target_code}.srt`
 
+## Audio Input
+
+Both pipelines read from the same device selection (`gui/device_list.py`):
+
+- **Microphones** via `sounddevice`, enumerated per host API (WASAPI preferred; WDM-KS is excluded because its device names are unusable).
+- **Loopback devices** (Windows) via `soundcard`'s WASAPI loopback — capture what an output device is *playing*, so system audio can be translated without a virtual audio cable. Loopback speakers get synthetic negative indices registered in `audio/loopback.py`, which lets the controller resolve them at stream-open time without importing GUI code. They are always recorded in stereo and mixed to mono (single-channel WASAPI recording returns garbage).
+
+`soundcard` is an optional import: if it is missing, loopback entries simply don't appear.
+
+## Cost Guards
+
+Every stage that can avoid an API call does:
+
+- Silent segments are deleted before transcription; with the noise filter on, loud-but-speechless ones are too
+- Sub-word fragments never reach a translation call
+- Short streaming utterances are coalesced into one call instead of several
+- Verified Quran verses and same-language text bypass the translation call entirely
+- The Arabic re-transcription pass is skipped whenever its output would go unused
+- The rolling summary is rate-limited by both count and time
+- A running session auto-stops after 10 minutes without any transcription (streaming bills silent minutes)
+
 ## Threading Model
 
-The pipeline runs on multiple threads (audio capture, segment writer, transcription/translation processor, streaming receive thread, async context summarizer, GUI main thread). The GUI communicates with the pipeline via queues polled from the Tk event loop; logging goes through the thread-safe `utils/logging.py`.
+The pipeline runs on multiple threads (audio capture, segment writer, transcription/translation processor, streaming receive/feeder/reconnect-supervisor threads, async context summarizer, GUI main thread). The GUI communicates with the pipeline via queues polled from the Tk event loop; logging goes through the thread-safe `utils/logging.py`.
+
+Each thread loop **captures its stop event at entry** rather than reading `controller.stop_event` live: `start()` replaces the event, so a thread that outlived a previous `stop()`'s join timeout (e.g. one blocked in an API call) would otherwise be re-armed by the next start and run as a zombie alongside the new session.

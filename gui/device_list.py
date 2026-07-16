@@ -8,12 +8,6 @@ from audio.loopback import clear as _loopback_clear
 from audio.loopback import register as _loopback_register
 from config import FS
 
-# Sample rates to try when validating a device.  Many devices (headsets,
-# USB audio, speaker loopback) only advertise 44.1/48 kHz natively; Windows
-# WASAPI resamples to FS at stream-open time, so any of these passing means
-# the device is usable.
-_CHECK_RATES = (FS,)
-
 
 def _is_usable_input(device_idx: int) -> bool:
     """Return True if the device can be opened as a mono input at FS."""
@@ -49,12 +43,16 @@ _SKIP_HOSTAPIS = {"Windows WDM-KS"}
 def get_input_devices() -> tuple[list[str], list[str], list[int], list[bool]]:
     """Enumerate usable input devices.
 
+    Lists sounddevice input devices first, then any WASAPI loopback outputs
+    (see audio/loopback.py) so system audio can be captured like a mic.
+
     Returns:
         (display_names, base_names, device_indices, loopback_flags) — display
         names are numbered for dropdowns; base names are the raw device names
-        used for persistence; loopback_flags is always all-False (loopback
-        capture is not supported by sounddevice). Raises nothing: on
-        enumeration failure all lists are empty.
+        used for persistence; loopback_flags marks the entries that are
+        loopback captures rather than real inputs (their device index is the
+        synthetic negative one registered in audio/loopback.py). Raises
+        nothing: on enumeration failure all lists are empty.
     """
     display_names: list[str] = []
     base_names: list[str] = []

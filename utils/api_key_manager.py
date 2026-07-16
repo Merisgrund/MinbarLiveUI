@@ -9,7 +9,12 @@ from collections.abc import Callable
 import customtkinter as ctk
 
 from config import ICON_PATH, ICON_PATH_PNG
-from providers import PROVIDER_CHOICES, clear_api_key, save_api_key
+from providers import (
+    PROVIDER_CHOICES,
+    clear_api_key,
+    has_insecure_key_fallback,
+    save_api_key,
+)
 from utils.icons import ICO_SUPPORTED, scaled_icon_photo
 from utils.keyring_storage import is_keyring_available
 from utils.logging import log
@@ -586,13 +591,29 @@ def prompt_for_api_key(
             icon="✓",
             ok_label=t.get("dlg_ok", "OK"),
         )
-    else:
+    elif has_insecure_key_fallback(provider):
         _ctk_msgbox(
             root,
             "Saved",
             t.get(
                 "dlg_key_saved_insecure",
                 "API key saved (stored in settings file, not keyring).",
+            ),
+            c,
+            icon="⚠",
+            icon_color=c.get("warning", "#d97706"),
+            ok_label=t.get("dlg_ok", "OK"),
+        )
+    else:
+        # No keychain and no file fallback for this provider: the key works
+        # now but is gone after a restart. Saying "saved" here would be a lie.
+        _ctk_msgbox(
+            root,
+            "Saved",
+            t.get(
+                "dlg_key_saved_session_only",
+                "No keyring available — the key works for this session only "
+                "and must be entered again after a restart.",
             ),
             c,
             icon="⚠",

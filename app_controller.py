@@ -1049,6 +1049,11 @@ class AppController:
         """
         Hot-swap the input device without stopping the rest of the pipeline.
 
+        Both pipeline modes only need the capture thread replaced: in
+        streaming mode the connection stays open and keeps its original
+        capture rate (_streaming_capture_rate), so the new thread must be
+        started with that same rate rather than re-deriving it.
+
         Args:
             new_device: New device index to switch to.
             timeout: Max time to wait for old stream to close.
@@ -1059,12 +1064,6 @@ class AppController:
         if not self._running:
             log("Cannot change device: not running", level="WARNING")
             return False
-
-        if self._streaming_handle is not None:
-            # In streaming mode only the capture thread needs to change —
-            # the WebSocket connection stays alive.  Use the same rate that
-            # was used when the session started.
-            pass  # fall through to the shared restart logic below
 
         if new_device == self._current_device:
             log(f"Device {new_device} already active, no change needed", level="DEBUG")
