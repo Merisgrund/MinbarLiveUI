@@ -248,6 +248,14 @@ BATCH_RETENTION_DAYS = 90
 # STREAMING (real-time transcription engines, P7 pipeline_mode="streaming")
 # -------------------------
 STREAMING_CHUNK_MS = 50  # PCM chunk size fed to the streaming connection
+# WASAPI capture buffer for loopback recording, as a duration — deliberately
+# NOT derived from STREAMING_CHUNK_MS. soundcard turns the recorder blocksize
+# straight into the WASAPI buffer duration, so the old `chunk_frames * 4`
+# shrank the buffer from 800 ms to 200 ms when STREAMING_CHUNK_MS went 200 ->
+# 50, and any stall past that overran it (WASAPI raised DATA_DISCONTINUITY and
+# dropped samples — audible as clipped speech). Costs no latency: the loop
+# still reads STREAMING_CHUNK_MS at a time, this is only headroom.
+LOOPBACK_CAPTURE_BUFFER_SECONDS = 0.5
 # Reconnect-with-backoff when the streaming connection dies mid-session
 # (network blip, server-side session end). Retries continue until Stop with
 # exponential backoff between attempts; the first transcript after a
@@ -297,7 +305,7 @@ STREAMING_COALESCE_MIN_WORDS = 6
 # Kept short so a trailing clause reaches translation quickly — the shorter the
 # hold, the sooner the translation lands under the transcription in Realtime
 # mode (at the cost of GPT occasionally seeing a slightly shorter clause).
-STREAMING_COALESCE_HOLD_SECONDS = 2
+STREAMING_COALESCE_HOLD_SECONDS = 1
 
 # -------------------------
 # CONTEXT MANAGEMENT

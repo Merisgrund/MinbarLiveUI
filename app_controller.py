@@ -24,6 +24,7 @@ from audio.writer import async_write_audio, clear_write_queue, segment_writer
 from config import (
     AUDIO_DIR,
     FS,
+    LOOPBACK_CAPTURE_BUFFER_SECONDS,
     STREAMING_CHUNK_MS,
     STREAMING_COALESCE_HOLD_SECONDS,
     STREAMING_COALESCE_MIN_WORDS,
@@ -548,9 +549,12 @@ class AppController:
             import soundcard as sc  # noqa: PLC0415
 
             chunk_frames = max(1, int(samplerate * STREAMING_CHUNK_MS / 1000))
+            buffer_frames = max(
+                chunk_frames, int(samplerate * LOOPBACK_CAPTURE_BUFFER_SECONDS)
+            )
             mic = sc.get_microphone(id=str(speaker.id), include_loopback=True)
             with mic.recorder(samplerate=samplerate, channels=2,
-                               blocksize=chunk_frames * 4) as recorder:
+                               blocksize=buffer_frames) as recorder:
                 log(
                     f"Loopback streaming recorder started for '{speaker.name}' "
                     f"at {samplerate} Hz",
