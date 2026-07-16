@@ -195,6 +195,7 @@ class SubtitleWindow(tk.Toplevel):
         adaptive_catchup: bool = False,
         theme_mode: str = "dark",
         bilingual_mode: bool = False,
+        on_stop=None,
     ):
         super().__init__(master)
         # Build fully transparent: a fresh Toplevel paints white with a
@@ -208,6 +209,7 @@ class SubtitleWindow(tk.Toplevel):
             pass
         is_windows = sys.platform == "win32"
         self._on_close = on_close
+        self._on_stop = on_stop
         self._monitor_index = monitor_index
         self._target_language = target_language
         self._subtitle_mode = subtitle_mode  # static or continuous
@@ -268,7 +270,10 @@ class SubtitleWindow(tk.Toplevel):
         # OBS window capture on most platforms.
         self._setup_borderless_window()
 
-        self.bind("<Escape>", lambda e: self._on_close())
+        # Esc stops the translation (like the Stop button) but never closes
+        # the overlay or the app — a mis-hit shouldn't take the display down
+        # mid-session. The window's close protocol still routes to on_close.
+        self.bind("<Escape>", self._on_escape)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         # Position on correct monitor BEFORE showing
@@ -1173,6 +1178,12 @@ class SubtitleWindow(tk.Toplevel):
             self._feed_anim_job = None
         self._live_feed_scroll = 0.0
         self._live_feed_scroll_target = 0.0
+
+    def _on_escape(self, _event=None):
+        """Esc → stop the translation (never close). No-op when no stop
+        callback is wired (e.g. a standalone render harness)."""
+        if self._on_stop is not None:
+            self._on_stop()
 
     def hide(self):
         """Make the window fully invisible on screen AND in OBS.

@@ -52,7 +52,10 @@ from utils.settings import (
     SUBTITLE_MODE_REALTIME,
     SUBTITLE_MODE_STATIC,
     SUBTITLE_MODES,
+    TARGET_LANGUAGE_DISPLAY_NAMES,
     TARGET_LANGUAGE_NAMES,
+    language_canonical_name,
+    language_display_name,
     load_settings,
     save_settings,
 )
@@ -784,13 +787,17 @@ class AppGUI(
             source_sub, "source", symbol="⌁", size=14, weight="bold"
         )
         source_label.grid(row=0, column=0, sticky="w")
+        # Canonical (English) names drive storage/lookups; the dropdown shows
+        # the native endonym via language_display_name().
         self._source_lang_names = [name for name, _code in SOURCE_LANGUAGES]
         self.source_lang_combo = self._combo(
             source_sub,
-            values=self._source_lang_names,
+            values=[language_display_name(n) for n in self._source_lang_names],
             command=lambda _value: self._on_source_language_change(),
         )
-        self.source_lang_combo.set(self._saved_settings.source_language)
+        self.source_lang_combo.set(
+            language_display_name(self._saved_settings.source_language)
+        )
         self.source_lang_combo.grid(row=1, column=0, sticky="ew", pady=(4, 0))
         # Real-time mode has no auto-detect → hide "Automatic" while streaming.
         self._refresh_source_language_combo()
@@ -811,10 +818,12 @@ class AppGUI(
         target_label.grid(row=0, column=0, sticky="w")
         self.language_combo = self._combo(
             target_sub,
-            values=TARGET_LANGUAGE_NAMES,
+            values=TARGET_LANGUAGE_DISPLAY_NAMES,
             command=lambda _value: self._on_language_change(),
         )
-        self.language_combo.set(self._saved_settings.target_language)
+        self.language_combo.set(
+            language_display_name(self._saved_settings.target_language)
+        )
         self.language_combo.grid(row=1, column=0, sticky="ew", pady=(4, 0))
 
         # ── Subtitle Mode + Mode Controls — side by side ─────────────────────
@@ -1299,6 +1308,7 @@ class AppGUI(
             theme_mode=getattr(
                 self._saved_settings, "subtitle_theme_mode", self._theme_mode
             ),
+            on_stop=self._request_stop_from_subtitle,
         )
         self.height_slider.set(self._saved_settings.window_height_percent)
         if not self._running:
@@ -1316,6 +1326,11 @@ class AppGUI(
 
     def _finalize_setup(self) -> None:
         self._set_status(False)
+        # Track window focus from startup so the very first dropdown click
+        # after the window regains focus only restores focus (opens on the
+        # second click). Otherwise this is installed lazily on the first
+        # dropdown open, leaving the first-ever interaction unguarded.
+        CustomDropdown._install_global_handler(self)
         self._load_api_key_on_startup()
         self._update_speed_button_states()
         if self._saved_settings.hide_subtitle_on_stop:
@@ -1523,6 +1538,13 @@ class AppGUI(
             self.subtitle_window.set_stopped_hint(False)
         log(self.gui_texts.get("log_started", "Started."), level="INFO")
 
+    def _request_stop_from_subtitle(self) -> None:
+        """Esc on the subtitle overlay stops the pipeline (like the Stop
+        button) and never closes the window or the app. Ignored when nothing
+        is running, so a stray Esc while idle does nothing."""
+        if self._running:
+            self.on_stop()
+
     def on_stop(self) -> None:
         try:
             self.controller.stop()
@@ -1667,15 +1689,17 @@ class AppGUI(
         self._save_current_settings()
 
     def _on_language_change(self) -> None:
-        self._saved_settings.target_language = self.language_combo.get()
+        canonical = language_canonical_name(self.language_combo.get())
+        self._saved_settings.target_language = canonical
         if self.subtitle_window and self.subtitle_window.winfo_exists():
-            self.subtitle_window.set_language(self.language_combo.get())
-        log(f"Target language: {self.language_combo.get()}", level="INFO")
+            self.subtitle_window.set_language(canonical)
+        log(f"Target language: {canonical}", level="INFO")
         self._save_current_settings()
 
     def _on_source_language_change(self) -> None:
-        self._saved_settings.source_language = self.source_lang_combo.get()
-        log(f"Source language: {self.source_lang_combo.get()}", level="INFO")
+        canonical = language_canonical_name(self.source_lang_combo.get())
+        self._saved_settings.source_language = canonical
+        log(f"Source language: {canonical}", level="INFO")
         self._save_current_settings()
         # Segmented mode re-reads the source language per audio segment; the
         # streaming (Deepgram) socket fixes it at connect, so reconnect to apply.
@@ -1721,26 +1745,30 @@ class AppGUI(
             choices = [n for n in self._source_lang_names if n != "Automatic"]
         else:
             choices = list(self._source_lang_names)
-        self.source_lang_combo.configure(values=choices)
+        self.source_lang_combo.configure(
+            values=[language_display_name(n) for n in choices]
+        )
         if streaming and self._saved_settings.source_language == "Automatic":
             default_src = choices[0] if choices else "Arabic"
             self._saved_settings.source_language = default_src
-            self.source_lang_combo.set(default_src)
+            self.source_lang_combo.set(language_display_name(default_src))
             log(
                 f"Source language set to {default_src} "
                 "(real-time mode has no auto-detect)",
                 level="INFO",
             )
         else:
-            self.source_lang_combo.set(self._saved_settings.source_language)
+            self.source_lang_combo.set(
+                language_display_name(self._saved_settings.source_language)
+            )
 
     def _on_swap_languages(self) -> None:
-        source = self.source_lang_combo.get()
-        target = self.language_combo.get()
+        source = language_canonical_name(self.source_lang_combo.get())
+        target = language_canonical_name(self.language_combo.get())
         if target not in self._source_lang_names or source not in TARGET_LANGUAGE_NAMES:
             return
-        self.source_lang_combo.set(target)
-        self.language_combo.set(source)
+        self.source_lang_combo.set(language_display_name(target))
+        self.language_combo.set(language_display_name(source))
         self._on_source_language_change()
         self._on_language_change()
 

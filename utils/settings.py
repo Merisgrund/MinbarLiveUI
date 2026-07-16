@@ -82,6 +82,77 @@ TARGET_LANGUAGES = [
 # Helper to get target language names (for GUI dropdowns)
 TARGET_LANGUAGE_NAMES = [name for name, _ in TARGET_LANGUAGES]
 
+# Native names (endonyms) shown in the source/target dropdowns. The English
+# name above stays the CANONICAL key everywhere else — settings storage,
+# footer_translations.json lookups, language codes and the translation prompt
+# all key off it — so only the dropdown DISPLAY uses the endonym. Keys must
+# match the names in SOURCE_LANGUAGES / TARGET_LANGUAGES. "Automatic" is a mode,
+# not a language, so it keeps its label.
+LANGUAGE_ENDONYMS = {
+    "Automatic": "Automatic",
+    "Arabic": "العربية",
+    "German": "Deutsch",
+    "English": "English",
+    "Turkish": "Türkçe",
+    "Urdu": "اردو",
+    "Indonesian": "Bahasa Indonesia",
+    "Malay": "Bahasa Melayu",
+    "Persian (Farsi)": "فارسی",
+    "Bengali": "বাংলা",
+    "Pashto": "پښتو",
+    "Somali": "Soomaali",
+    "Swahili": "Kiswahili",
+    "Hausa": "Hausa",
+    "Kurdish": "Kurdî",
+    "Bosnian": "Bosanski",
+    "Albanian": "Shqip",
+    "Chinese (Simplified)": "简体中文",
+    "Chinese (Traditional)": "繁體中文",
+    "Dutch": "Nederlands",
+    "French": "Français",
+    "Hindi": "हिन्दी",
+    "Italian": "Italiano",
+    "Japanese": "日本語",
+    "Korean": "한국어",
+    "Polish": "Polski",
+    "Portuguese": "Português",
+    "Punjabi": "ਪੰਜਾਬੀ",
+    "Russian": "Русский",
+    "Sindhi": "سنڌي",
+    "Spanish": "Español",
+    "Swedish": "Svenska",
+    "Tagalog": "Tagalog",
+    "Tamil": "தமிழ்",
+    "Thai": "ไทย",
+    "Vietnamese": "Tiếng Việt",
+}
+
+# Reverse map (endonym -> English canonical) plus identity for the canonical
+# names themselves, so a stored/legacy English value round-trips unchanged.
+_ENDONYM_TO_CANONICAL = {endo: canon for canon, endo in LANGUAGE_ENDONYMS.items()}
+for _canon in LANGUAGE_ENDONYMS:
+    _ENDONYM_TO_CANONICAL.setdefault(_canon, _canon)
+
+
+def language_display_name(canonical: str) -> str:
+    """English canonical name -> native endonym shown in the dropdowns."""
+    return LANGUAGE_ENDONYMS.get(canonical, canonical)
+
+
+def language_canonical_name(display: str) -> str:
+    """Native endonym (what a dropdown returns) -> English canonical name used
+    everywhere else. Passing an already-canonical name returns it unchanged."""
+    return _ENDONYM_TO_CANONICAL.get(display, display)
+
+
+# Endonym display lists in the same order as the canonical lists.
+SOURCE_LANGUAGE_DISPLAY_NAMES = [
+    language_display_name(name) for name, _ in SOURCE_LANGUAGES
+]
+TARGET_LANGUAGE_DISPLAY_NAMES = [
+    language_display_name(name) for name in TARGET_LANGUAGE_NAMES
+]
+
 # Available translation providers (see providers/ package). Only registered
 # providers belong here; unknown values in settings.json fall back to the
 # default. This drives the ``ai_provider`` setting (translation only).

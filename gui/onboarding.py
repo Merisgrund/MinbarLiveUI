@@ -44,6 +44,8 @@ from utils.settings import (
     SOURCE_LANGUAGES,
     STREAMING_TRANSCRIPTION_PROVIDERS,
     TARGET_LANGUAGE_NAMES,
+    language_canonical_name,
+    language_display_name,
     load_settings,
     save_settings,
 )
@@ -480,13 +482,18 @@ class OnboardingWizard(ctk.CTk):
         # Real-time (the default transcription mode) can't auto-detect the
         # source language, so "Automatic" is not offered here. Sync the state
         # to a concrete language up front — .set() does not fire the command.
+        # Canonical (English) names are stored; the dropdown shows the endonym.
         source_names = [name for name, code in SOURCE_LANGUAGES if code is not None]
         if self._state["source_language"] not in source_names:
             self._state["source_language"] = source_names[0]
-        source_combo = self._combo(self._container, source_names)
-        source_combo.set(self._state["source_language"])
+        source_combo = self._combo(
+            self._container, [language_display_name(n) for n in source_names]
+        )
+        source_combo.set(language_display_name(self._state["source_language"]))
         source_combo.configure(
-            command=lambda v: self._state.__setitem__("source_language", v)
+            command=lambda v: self._state.__setitem__(
+                "source_language", language_canonical_name(v)
+            )
         )
 
         self._section_label(
@@ -494,14 +501,20 @@ class OnboardingWizard(ctk.CTk):
             self._t("wizard_target_language", "Subtitle language (target)"),
             muted=True,
         )
-        target_combo = self._combo(self._container, TARGET_LANGUAGE_NAMES)
+        target_combo = self._combo(
+            self._container, [language_display_name(n) for n in TARGET_LANGUAGE_NAMES]
+        )
         target_combo.set(
-            self._state["target_language"]
-            if self._state["target_language"] in TARGET_LANGUAGE_NAMES
-            else TARGET_LANGUAGE_NAMES[0]
+            language_display_name(
+                self._state["target_language"]
+                if self._state["target_language"] in TARGET_LANGUAGE_NAMES
+                else TARGET_LANGUAGE_NAMES[0]
+            )
         )
         target_combo.configure(
-            command=lambda v: self._state.__setitem__("target_language", v)
+            command=lambda v: self._state.__setitem__(
+                "target_language", language_canonical_name(v)
+            )
         )
 
     # ── Step 3: audio input ────────────────────────────────────────────────

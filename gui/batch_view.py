@@ -33,6 +33,8 @@ from utils.settings import (
     SOURCE_LANGUAGES,
     STREAMING_TRANSCRIPTION_PROVIDERS,
     TARGET_LANGUAGE_NAMES,
+    language_canonical_name,
+    language_display_name,
 )
 
 # Streaming engines can't run in batch — the realtime engines fall back to
@@ -353,6 +355,8 @@ class BatchViewMixin:
         self._label(
             box, "batch_target_language", size=12, weight="bold", register=False
         ).grid(row=0, column=1, sticky="w", pady=(0, 1))
+        # Canonical (English) names are stored/passed to the pipeline; the
+        # dropdowns show the native endonym via language_display_name().
         source_names = [name for name, _code in SOURCE_LANGUAGES]
         self._batch_source_language = (
             self._batch_source_language
@@ -361,11 +365,11 @@ class BatchViewMixin:
         )
         self.batch_source_combo = self._combo(
             box,
-            values=source_names,
+            values=[language_display_name(n) for n in source_names],
             command=lambda _v: self._on_batch_source_language_change(),
             register=False,
         )
-        self.batch_source_combo.set(self._batch_source_language)
+        self.batch_source_combo.set(language_display_name(self._batch_source_language))
         self.batch_source_combo.grid(
             row=1, column=0, sticky="ew", padx=(0, 6), pady=(0, 14)
         )
@@ -377,11 +381,11 @@ class BatchViewMixin:
         )
         self.batch_target_combo = self._combo(
             box,
-            values=target_names,
+            values=[language_display_name(n) for n in target_names],
             command=lambda _v: self._on_batch_target_language_change(),
             register=False,
         )
-        self.batch_target_combo.set(self._batch_target_language)
+        self.batch_target_combo.set(language_display_name(self._batch_target_language))
         self.batch_target_combo.grid(
             row=1, column=1, sticky="ew", padx=(6, 0), pady=(0, 14)
         )
@@ -535,13 +539,14 @@ class BatchViewMixin:
         self._populate_batch_trans_models(reset=False)
 
         # ── Reset engines + output to the app defaults ───────────────────────
-        # Half-width and centered: a minor "reset" action, not a full-width
-        # control that reads as a primary button.
+        # Sits in the right column, aligned under the model combo above it — a
+        # minor "reset" action kept to half the width so it doesn't read as a
+        # primary, full-width control.
         self.batch_defaults_btn = ctk.CTkButton(
             more,
             text=self.gui_texts.get("batch_defaults", "Use Default"),
             command=self._on_batch_defaults,
-            width=170,
+            width=0,
             height=32,
             corner_radius=12,
             font=ctk.CTkFont(family="Segoe UI", size=13),
@@ -549,7 +554,9 @@ class BatchViewMixin:
             hover_color=self._colors["button_hover"],
             text_color=self._colors["text"],
         )
-        self.batch_defaults_btn.grid(row=4, column=1, columnspan=2, sticky="e", pady=(2, 0))
+        self.batch_defaults_btn.grid(
+            row=4, column=1, sticky="ew", padx=(6, 0), pady=(2, 0)
+        )
 
     def _batch_more_button_text(self) -> str:
         arrow = "▾" if self._batch_more_open else "▸"
@@ -696,10 +703,14 @@ class BatchViewMixin:
         self._populate_batch_trans_models(reset=True)
 
     def _on_batch_source_language_change(self) -> None:
-        self._batch_source_language = self.batch_source_combo.get()
+        self._batch_source_language = language_canonical_name(
+            self.batch_source_combo.get()
+        )
 
     def _on_batch_target_language_change(self) -> None:
-        self._batch_target_language = self.batch_target_combo.get()
+        self._batch_target_language = language_canonical_name(
+            self.batch_target_combo.get()
+        )
 
     def _on_batch_transcription_model_change(self) -> None:
         idx = self.batch_stt_combo.current()

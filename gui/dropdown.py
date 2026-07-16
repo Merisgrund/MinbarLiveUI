@@ -30,6 +30,14 @@ class CustomDropdown(ctk.CTkFrame):
     # Monotonic timestamp of the last OS-level window FocusIn event.
     # Used to detect "click that restored window focus" vs a normal click.
     _focus_in_time: float = -999.0
+    # A click within this many seconds of the window regaining OS focus is
+    # treated as the focus-restore click: it re-focuses the window without
+    # opening the dropdown (the user opens it with a second click). Kept
+    # generous — Tk can dispatch the FocusIn noticeably before the click on a
+    # cold/ scaled window, so the old 50 ms window missed it and the dropdown
+    # opened on the first click. The first click resets the timestamp, so a
+    # wide window never swallows the deliberate second click.
+    _RESTORE_MAX_DELAY: float = 0.3
 
     def __init__(
         self,
@@ -212,7 +220,10 @@ class CustomDropdown(ctk.CTkFrame):
         # If the window just gained OS focus, this click is the focus-restore
         # click.  Accept the focus but don't open/close the dropdown; the user
         # can click a second time to interact with it.
-        just_focused = time.monotonic() - CustomDropdown._focus_in_time < 0.05
+        just_focused = (
+            time.monotonic() - CustomDropdown._focus_in_time
+            < CustomDropdown._RESTORE_MAX_DELAY
+        )
         CustomDropdown._focus_in_time = -999.0  # consume regardless
         if just_focused:
             return "break"
