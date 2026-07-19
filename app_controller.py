@@ -23,6 +23,7 @@ from audio.device_support import (
     input_device_candidates,
     input_stream_kwargs,
 )
+from audio.level_meter import AudioLevelMeter, AudioLevelSnapshot
 from audio.loopback import get_speaker as get_loopback_speaker
 from audio.vad import StreamNoiseGate, has_speech
 from audio.writer import async_write_audio, clear_write_queue, segment_writer
@@ -70,7 +71,6 @@ from utils.settings import (
     load_settings,
 )
 from utils.user_messages import classify_error, get_user_message
-
 
 INPUT_STREAM_START_TIMEOUT_SECONDS = 6.0
 INPUT_STREAM_OPEN_ATTEMPTS = 2
@@ -191,6 +191,9 @@ class AppController:
         self.stop_event = threading.Event()
         self._input_stop_event = threading.Event()  # Separate stop for input stream
         self._input_thread: threading.Thread | None = None
+        self._input_level_meter = AudioLevelMeter()
+        self._input_level_test_stop_event = threading.Event()
+        self._input_level_test_thread: threading.Thread | None = None
         self._current_device: int | None = None
         self._streaming_capture_rate: int = (
             FS  # rate used by the current streaming input thread
@@ -480,6 +483,104 @@ class AppController:
         except queue.Full:
             pass
 
+    def get_input_level(self) -> AudioLevelSnapshot:
+        """Return the latest local input level without exposing mutable state."""
+
+        return self._input_level_meter.snapshot()
+
+    def reset_input_level(self) -> None:
+        """Clear the input meter immediately (for stop and device changes)."""
+
+        self._input_level_meter.reset()
+
+    def is_input_level_test_running(self) -> bool:
+        """Whether a local meter-only capture thread is currently active."""
+
+        thread = self._input_level_test_thread
+        return bool(
+            thread is not None
+            and thread.is_alive()
+            and not self._input_level_test_stop_event.is_set()
+        )
+
+    def start_input_level_test(self, input_device: int | None = None) -> None:
+        """Open local meter-only capture and synchronously confirm the device.
+
+        This preview never starts writers, providers, translation, history, or
+        cost tracking. A live session and a preview cannot own the same input
+        concurrently.
+        """
+
+        if self._running:
+            raise RuntimeError("Cannot test the input level during a live session.")
+
+        self.stop_input_level_test()
+        if (
+            self._input_level_test_thread is not None
+            and self._input_level_test_thread.is_alive()
+        ):
+            raise AudioInputError("The previous input-level test is still stopping.")
+        if input_device is None:
+            input_device = get_default_input_device()
+
+        self.reset_input_level()
+        test_stop = threading.Event()
+        startup_result: queue.Queue[BaseException | None] = queue.Queue(maxsize=1)
+        thread = threading.Thread(
+            target=self._input_level_test_capture_thread,
+            args=(input_device, test_stop, startup_result),
+            daemon=True,
+            name="input-level-test",
+        )
+        self._input_level_test_stop_event = test_stop
+        self._input_level_test_thread = thread
+        thread.start()
+
+        try:
+            result = startup_result.get(timeout=INPUT_STREAM_START_TIMEOUT_SECONDS)
+        except queue.Empty as exc:
+            test_stop.set()
+            thread.join(timeout=0.5)
+            if self._input_level_test_thread is thread and not thread.is_alive():
+                self._input_level_test_thread = None
+            self.reset_input_level()
+            raise AudioInputError(
+                "Audio input did not open within the startup timeout."
+            ) from exc
+
+        if result is not None:
+            test_stop.set()
+            thread.join(timeout=0.5)
+            if self._input_level_test_thread is thread and not thread.is_alive():
+                self._input_level_test_thread = None
+            self.reset_input_level()
+            raise AudioInputError(str(result)) from result
+
+    def stop_input_level_test(self, timeout: float = 1.0) -> None:
+        """Stop meter-only capture without touching a live pipeline."""
+
+        thread = self._input_level_test_thread
+        self._input_level_test_stop_event.set()
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=timeout)
+        if (
+            self._input_level_test_thread is thread
+            and (thread is None or not thread.is_alive())
+        ):
+            self._input_level_test_thread = None
+        elif thread is not None and thread.is_alive():
+            log("Input level test is still stopping", level="WARNING")
+        self.reset_input_level()
+
+    def _observe_input_level(self, mono, samplerate: int) -> None:
+        """Publish mono PCM before VAD/noise-gate processing."""
+
+        self._input_level_meter.observe(mono, sample_rate=samplerate)
+
+    def _segmented_audio_callback(self, indata, frames, time_info, status) -> None:
+        self._observe_input_level(indata[:, 0], FS)
+        audio_callback(indata, frames, time_info, status)
+
     def _start_confirmed_input_thread(
         self,
         target,
@@ -529,8 +630,33 @@ class AppController:
     ) -> None:
         """Open a microphone with bounded retry and same-device fallbacks."""
 
-        stop_event = self.stop_event
-        input_stop = self._input_stop_event
+        self._run_sounddevice_input_loop(
+            device,
+            samplerate,
+            stream_kwargs,
+            startup_result,
+            stop_event=self.stop_event,
+            input_stop=self._input_stop_event,
+            label=label,
+            track_current_device=True,
+            report_runtime_error=True,
+        )
+
+    def _run_sounddevice_input_loop(
+        self,
+        device: int,
+        samplerate: int,
+        stream_kwargs: dict,
+        startup_result: queue.Queue[BaseException | None] | None,
+        *,
+        stop_event: threading.Event,
+        input_stop: threading.Event,
+        label: str,
+        track_current_device: bool,
+        report_runtime_error: bool,
+    ) -> None:
+        """Shared PortAudio open/retry loop for sessions and local previews."""
+
         candidates = input_device_candidates(
             sd,
             device_index=device,
@@ -560,7 +686,8 @@ class AppController:
                     if stop_event.is_set() or input_stop.is_set():
                         return
                     opened = True
-                    self._current_device = candidate
+                    if track_current_device:
+                        self._current_device = candidate
                     if candidate != device:
                         log(
                             f"{label} using equivalent audio backend "
@@ -576,12 +703,17 @@ class AppController:
                 except Exception as exc:
                     last_error = exc
                     if opened:
-                        self._current_device = None
+                        if track_current_device:
+                            self._current_device = None
                         log(
                             f"Audio device error (device {candidate}): {exc}",
                             level="ERROR",
                         )
-                        if not stop_event.is_set() and not input_stop.is_set():
+                        if (
+                            report_runtime_error
+                            and not stop_event.is_set()
+                            and not input_stop.is_set()
+                        ):
                             self.error_queue.put(f"audio_device_lost:{candidate}")
                         return
 
@@ -610,12 +742,92 @@ class AppController:
                 break
 
         error = last_error or RuntimeError("Audio input startup was cancelled.")
-        self._current_device = None
+        if track_current_device:
+            self._current_device = None
         log(f"Audio device error (device {device}): {error}", level="ERROR")
         if startup_result is not None:
             self._report_input_start(startup_result, error)
-        elif not stop_event.is_set() and not input_stop.is_set():
+        elif (
+            report_runtime_error
+            and not stop_event.is_set()
+            and not input_stop.is_set()
+        ):
             self.error_queue.put(f"audio_device_lost:{device}")
+
+    def _input_level_test_audio_callback(
+        self, indata, frames, time_info, status
+    ) -> None:
+        if status:
+            log(f"LEVEL-TEST-CALLBACK Status: {status}", level="DEBUG")
+        self._observe_input_level(indata[:, 0], FS)
+
+    def _input_level_test_capture_thread(
+        self,
+        device: int,
+        test_stop: threading.Event,
+        startup_result: queue.Queue[BaseException | None],
+    ) -> None:
+        speaker = get_loopback_speaker(device)
+        if speaker is not None:
+            self._loopback_input_level_test(
+                device,
+                speaker,
+                test_stop,
+                startup_result,
+            )
+            return
+
+        self._run_sounddevice_input_loop(
+            device,
+            FS,
+            {
+                "channels": 1,
+                "callback": self._input_level_test_audio_callback,
+            },
+            startup_result,
+            stop_event=test_stop,
+            input_stop=test_stop,
+            label="Input level test",
+            track_current_device=False,
+            report_runtime_error=False,
+        )
+
+    def _loopback_input_level_test(
+        self,
+        device: int,
+        speaker,
+        test_stop: threading.Event,
+        startup_result: queue.Queue[BaseException | None],
+    ) -> None:
+        """Capture loopback only for the local input-level preview."""
+
+        started = False
+        try:
+            import soundcard as sc  # noqa: PLC0415
+
+            block_frames = int(FS * 0.1)
+            mic = sc.get_microphone(id=str(speaker.id), include_loopback=True)
+            with mic.recorder(
+                samplerate=FS, channels=2, blocksize=block_frames * 4
+            ) as recorder:
+                started = True
+                self._report_input_start(startup_result, None)
+                log(
+                    f"Input level test started for loopback '{speaker.name}'",
+                    level="INFO",
+                )
+                while not test_stop.is_set():
+                    data = recorder.record(numframes=block_frames)
+                    mono = data.mean(axis=1).astype(np.float32)
+                    self._observe_input_level(mono, FS)
+                log("Input level test loopback stopping", level="DEBUG")
+        except Exception as exc:
+            log(
+                f"Input level test error (device {device}): {exc}",
+                level="ERROR",
+            )
+            if not started:
+                self._report_input_start(startup_result, exc)
 
     def _input_stream_thread(
         self,
@@ -635,7 +847,7 @@ class AppController:
             FS,
             {
                 "channels": 1,
-                "callback": audio_callback,
+                "callback": self._segmented_audio_callback,
             },
             startup_result,
             label="InputStream",
@@ -668,6 +880,7 @@ class AppController:
                     data = recorder.record(numframes=block_frames)
                     # Mix stereo to mono
                     chunk = data.mean(axis=1).astype(np.float32)
+                    self._observe_input_level(chunk, FS)
                     write_samples_to_ring(chunk)
                 log("Loopback recorder stopping", level="DEBUG")
         except Exception as e:
@@ -680,8 +893,10 @@ class AppController:
     def _streaming_audio_callback(self, indata, frames, time_info, status):
         if status:
             log(f"STREAMING-CALLBACK Status: {status}", level="DEBUG")
+        mono = indata[:, 0]
+        self._observe_input_level(mono, self._streaming_capture_rate)
         try:
-            self._streaming_feed_queue.put_nowait(indata[:, 0].tobytes())
+            self._streaming_feed_queue.put_nowait(mono.tobytes())
         except queue.Full:
             pass  # unbounded by default; defensive only
 
@@ -749,6 +964,7 @@ class AppController:
                 while not stop_event.is_set() and not input_stop.is_set():
                     data = recorder.record(numframes=chunk_frames)
                     mono = data.mean(axis=1)  # stereo -> mono
+                    self._observe_input_level(mono, samplerate)
                     # Convert float32 [-1,1] to int16 bytes (engine expects PCM16)
                     pcm = (mono * 32767).clip(-32768, 32767).astype(np.int16)
                     try:
@@ -1196,12 +1412,21 @@ class AppController:
         if self._running:
             return
 
+        # A meter-only preview owns the same OS device. Release it before the
+        # real pipeline attempts its synchronously-confirmed open.
+        self.stop_input_level_test()
+        if (
+            self._input_level_test_thread is not None
+            and self._input_level_test_thread.is_alive()
+        ):
+            raise AudioInputError("The input-level test did not stop in time.")
         self.stop_event = threading.Event()
         self._input_stop_event = threading.Event()
         self.threads = []
 
         # Reset shared audio state to ensure clean start
         reset_ring_buffer()
+        self.reset_input_level()
         clear_write_queue()
 
         # Also clear the translation queue and any leftover streaming state —
@@ -1312,6 +1537,7 @@ class AppController:
         self._running = True
 
     def stop(self, timeout: float = 2.0):
+        self.stop_input_level_test(timeout=min(timeout, 1.0))
         if not self._running:
             return
 
@@ -1352,6 +1578,7 @@ class AppController:
         self._noise_gate = None
         self._current_device = None
         self._running = False
+        self.reset_input_level()
 
     def restart(self, input_device: int | None = None) -> None:
         """Stop and re-start the pipeline so settings that can't change on a
@@ -1421,6 +1648,7 @@ class AppController:
         # Reset and start new input stream
         self._input_stop_event = threading.Event()
         self._current_device = new_device
+        self.reset_input_level()
         try:
             if self._streaming_handle is not None:
                 self._start_confirmed_input_thread(
@@ -1436,6 +1664,7 @@ class AppController:
                 )
         except Exception as exc:
             self._current_device = None
+            self.reset_input_level()
             log(f"Input device switch failed for {new_device}: {exc}", level="ERROR")
             self.error_queue.put(f"audio_device_lost:{new_device}")
             return False

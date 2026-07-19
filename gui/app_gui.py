@@ -1,3 +1,4 @@
+import math
 import os
 import queue
 import re
@@ -18,6 +19,7 @@ from config import (
     ICON_PATH_PNG,
 )
 from gui.announce_view import AnnounceViewMixin
+from gui.audio_level_bar import AudioLevelBar
 from gui.batch_view import BatchViewMixin
 from gui.control_dashboard import (
     ICON_FONT,
@@ -265,6 +267,8 @@ class AppGUI(
         self.height_apply_job: str | None = None
         self.inactivity_check_job: str | None = None
         self.cost_poll_job: str | None = None
+        self.input_level_poll_job: str | None = None
+        self.input_level_test_stop_job: str | None = None
 
         # Startup update check (worker thread writes, after-poll reads).
         self._update_check_result: UpdateInfo | None = None
@@ -280,6 +284,16 @@ class AppGUI(
         self._fatal_stop_job: str | None = None
         self._log_polling = False
         self._last_cost_revision = -1
+        self._input_level_testing = False
+        self._input_level_test_samples: list[tuple[float, float, float]] = []
+        self._input_level_test_result: tuple[str, float, float] | None = None
+        self._input_level_visual_value = 0.0
+        self._input_level_display: tuple[str, float, float, bool] = (
+            "no_signal",
+            -96.0,
+            -96.0,
+            False,
+        )
         self._control_topmost_state: bool | None = None
         self._sidebar_resize_job: str | None = None
         self.speed_value = max(0.5, min(5.0, self._saved_settings.scroll_speed))
@@ -1356,6 +1370,103 @@ class AppGUI(
         setattr(self, f"{role}_color_reset_btn", reset_btn)
         return row
 
+    def _create_input_level_panel(self, parent: ctk.CTkFrame) -> None:
+        """Build the local, provider-independent input level display.
+
+        The audio callback only publishes a thread-safe snapshot on the
+        controller. This panel is updated exclusively by the Tk polling job
+        below, so capture never touches widgets from its worker thread.
+        """
+
+        panel = self._mini_panel(parent, corner_radius=15)
+        panel.pack(fill="x", pady=(10, 0))
+        panel.grid_columnconfigure(0, weight=1)
+        self.input_level_panel = panel
+
+        title = self._label(panel, "input_level", size=12, weight="bold")
+        title.grid(row=0, column=0, sticky="w", padx=(12, 8), pady=(8, 0))
+
+        self.input_level_state_label = ctk.CTkLabel(
+            panel,
+            text=self.gui_texts.get("input_level_no_signal", "No signal"),
+            height=24,
+            corner_radius=8,
+            font=ctk.CTkFont(
+                family="Segoe UI Variable Text", size=10, weight="bold"
+            ),
+            fg_color=self._colors["button"],
+            text_color=self._colors["muted"],
+        )
+        self.input_level_state_label.grid(
+            row=0, column=1, sticky="e", padx=(4, 12), pady=(8, 0)
+        )
+
+        self.input_level_bar = AudioLevelBar(
+            panel,
+            track_color=self._colors["entry"],
+            green_color=self._colors["accent"],
+            warning_color=self._colors["warning"],
+            danger_color=self._colors["danger"],
+            height=11,
+            border_color=self._colors["recessed_border"],
+        )
+        self.input_level_bar.grid(
+            row=1, column=0, columnspan=2, sticky="ew", padx=12, pady=(8, 6)
+        )
+        self.input_level_bar.set(0.0)
+
+        meter_footer = ctk.CTkFrame(panel, fg_color="transparent")
+        meter_footer.grid(
+            row=2, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 8)
+        )
+        meter_footer.grid_columnconfigure(0, weight=1)
+        self.input_level_value_label = ctk.CTkLabel(
+            meter_footer,
+            text="−∞ dBFS",
+            height=32,
+            anchor="w",
+            font=ctk.CTkFont(
+                family="Segoe UI Variable Text", size=11, weight="bold"
+            ),
+            text_color=self._colors["muted"],
+        )
+        self.input_level_value_label.grid(row=0, column=0, sticky="w")
+
+        self.input_level_test_btn = self._button(
+            meter_footer,
+            "input_level_test",
+            self._toggle_input_level_test,
+            height=32,
+        )
+        self.input_level_test_btn.configure(
+            width=116,
+            corner_radius=11,
+            font=ctk.CTkFont(
+                family="Segoe UI Variable Text", size=11, weight="bold"
+            ),
+        )
+        self.input_level_test_btn.grid(row=0, column=1, sticky="e", padx=(8, 0))
+
+        self.input_level_hint_label = ctk.CTkLabel(
+            panel,
+            text="",
+            justify="left",
+            anchor="w",
+            wraplength=280,
+            height=0,
+            font=ctk.CTkFont(family="Segoe UI Variable Text", size=10),
+            text_color=self._colors["muted"],
+        )
+        self.input_level_hint_label.grid(
+            row=3,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            padx=12,
+            pady=(0, 9),
+        )
+        self.input_level_hint_label.grid_remove()
+
     def _create_language_card(self) -> None:
         card = self._section_card(
             self._session_col,
@@ -1397,6 +1508,7 @@ class AppGUI(
                 selected_device = 0
             self.device_combo.current(selected_device)
         self.device_combo.pack(fill="x", pady=(8, 0))
+        self._create_input_level_panel(device_frame)
 
         # ── Source + Swap + Target — all on one row ─────────────────────────
         lang_pair_frame = ctk.CTkFrame(card, fg_color="transparent")
@@ -2395,6 +2507,11 @@ class AppGUI(
         self._start_log_polling()
         self.translation_poll_job = self.after(50, self._process_translation_queue)
         self.error_poll_job = self.after(250, self._poll_errors)
+        reset_level = getattr(self.controller, "reset_input_level", None)
+        if callable(reset_level):
+            reset_level()
+        self._render_input_level("no_signal", -96.0, -96.0)
+        self._schedule_input_level_poll()
         self.after(300, lambda: self._setup_autohide_scrollbar(self.sidebar))
         self._start_update_check()
         log(self.gui_texts.get("stopped", "Ready"), level="INFO")
@@ -2699,6 +2816,10 @@ class AppGUI(
         self._refresh_v3_dashboard()
 
     def on_start(self) -> None:
+        # A local meter preview owns the same audio device. Stop it before any
+        # provider readiness dialogs or capture startup so Start has one
+        # deterministic path and can never race a lingering test stream.
+        self._stop_input_level_test(show_result=False)
         # Prompt for any missing key; if the user dismisses the dialog the app
         # stays stopped (the dialog re-opens on the next Start attempt).
         self._clear_runtime_errors()
@@ -2771,6 +2892,7 @@ class AppGUI(
             )
             return
         self._running = False
+        self._stop_input_level_test(show_result=False)
         end_cost_session()
         self._cancel_cost_polling()
         self._refresh_cost_ui(force=True)
@@ -2896,10 +3018,412 @@ class AppGUI(
                 text_color=self._colors["danger"],
             )
             self.strategy_running_hint.grid_forget()
+        self._sync_input_level_controls()
         self._refresh_v3_dashboard(animate=running)
 
     def _get_input_devices(self) -> tuple[list[str], list[str], list[int], list[bool]]:
         return get_input_devices()
+
+    @staticmethod
+    def _classify_input_level_values(
+        rms_dbfs: float,
+        peak_dbfs: float,
+        clipping_ratio: float,
+        *,
+        is_stale: bool,
+    ) -> str:
+        """Map measured dBFS values to five conservative operator states.
+
+        The labels describe only the digital signal presented to MinbarLive;
+        they deliberately make no claim about acoustic SPL or recognition
+        quality. Silence remains neutral instead of looking like an error.
+        """
+
+        if (
+            is_stale
+            or not math.isfinite(rms_dbfs)
+            or not math.isfinite(peak_dbfs)
+            or peak_dbfs < -60.0
+        ):
+            return "no_signal"
+        if clipping_ratio >= 0.0005 or peak_dbfs >= -0.5:
+            return "clipping"
+        if rms_dbfs >= -10.0 or peak_dbfs >= -3.0:
+            return "high"
+        if rms_dbfs < -38.0:
+            return "quiet"
+        return "good"
+
+    @staticmethod
+    def _input_level_snapshot_values(
+        snapshot: object,
+    ) -> tuple[float, float, float, bool]:
+        """Read a controller snapshot defensively for GUI/test adapters."""
+
+        try:
+            rms_dbfs = float(snapshot.rms_dbfs)  # type: ignore[attr-defined]
+            peak_value = getattr(snapshot, "peak_hold_dbfs", None)
+            if peak_value is None:
+                peak_value = snapshot.peak_dbfs  # type: ignore[attr-defined]
+            peak_dbfs = float(peak_value)
+            clipping_ratio = float(getattr(snapshot, "clipping_ratio", 0.0))
+            is_stale = bool(snapshot.is_stale)  # type: ignore[attr-defined]
+        except (AttributeError, TypeError, ValueError):
+            return -96.0, -96.0, 0.0, True
+        return rms_dbfs, peak_dbfs, clipping_ratio, is_stale
+
+    def _input_level_state_text(self, state: str) -> str:
+        key = {
+            "quiet": "input_level_quiet",
+            "good": "input_level_good",
+            "high": "input_level_high",
+            "clipping": "input_level_clipping",
+        }.get(state, "input_level_no_signal")
+        return self.gui_texts.get(key, key)
+
+    def _input_level_state_colors(self, state: str) -> tuple[str, str]:
+        if state == "good":
+            return self._colors["accent_soft"], self._colors["accent"]
+        if state == "quiet":
+            return self._colors["warning_soft"], self._colors["warning"]
+        if state in {"high", "clipping"}:
+            return self._colors["danger_soft"], self._colors["danger"]
+        return self._colors["button"], self._colors["muted"]
+
+    def _smooth_input_level_value(self, target: float, state: str) -> float:
+        """Advance the visual meter with a responsive attack and soft release."""
+
+        target = max(0.0, min(1.0, target))
+        current = self._input_level_visual_value
+        blend = 0.52 if target >= current else 0.24
+        current += (target - current) * blend
+
+        # A held peak may classify an otherwise calmer RMS frame as too high.
+        # Ensure that actionable states still visibly enter the red zone.
+        if state == "high":
+            current = max(current, AudioLevelBar.RED_START + 0.02)
+        elif state == "clipping":
+            current = 1.0
+        if abs(target - current) < 0.002:
+            current = target
+        self._input_level_visual_value = current
+        return current
+
+    def _render_input_level(
+        self,
+        state: str,
+        rms_dbfs: float,
+        peak_dbfs: float,
+        *,
+        complete: bool = False,
+    ) -> None:
+        """Render one level snapshot; always called on Tk's main thread."""
+
+        if not hasattr(self, "input_level_bar"):
+            return
+        self._input_level_display = (state, rms_dbfs, peak_dbfs, complete)
+        state_text = self._input_level_state_text(state)
+        soft_color, signal_color = self._input_level_state_colors(state)
+
+        self.input_level_state_label.configure(
+            text=state_text,
+            fg_color=soft_color,
+            text_color=signal_color,
+        )
+        if state == "no_signal" or complete:
+            meter_value = 0.0
+            self._input_level_visual_value = 0.0
+            level_text = (
+                "−∞ dBFS" if state == "no_signal" else f"{rms_dbfs:.1f} dBFS"
+            )
+        else:
+            # RMS is already attack/release smoothed by AudioLevelMeter.  It
+            # makes a much calmer main fill than the held peak, which used to
+            # leave the entire bar apparently frozen after loud syllables.
+            meter_target = max(0.0, min(1.0, (rms_dbfs + 60.0) / 60.0))
+            meter_value = self._smooth_input_level_value(meter_target, state)
+            level_text = f"{rms_dbfs:.1f} dBFS"
+        self.input_level_bar.set(meter_value)
+        self.input_level_value_label.configure(
+            text=level_text,
+            text_color=(
+                signal_color if state != "no_signal" else self._colors["muted"]
+            ),
+        )
+
+        if self._input_level_testing:
+            hint = self.gui_texts.get(
+                "input_level_test_instruction",
+                "Speak at your normal volume for 10 seconds.",
+            )
+        elif complete:
+            complete_text = self.gui_texts.get(
+                "input_level_test_complete", "Level test complete"
+            )
+            hint = f"{complete_text} · {state_text}"
+        else:
+            hint = ""
+        self.input_level_hint_label.configure(
+            text=hint,
+            text_color=self._colors["muted"],
+        )
+        if hint:
+            self.input_level_hint_label.grid()
+        else:
+            self.input_level_hint_label.grid_remove()
+
+    def _refresh_input_level_display(self) -> None:
+        state, rms_dbfs, peak_dbfs, complete = self._input_level_display
+        self._render_input_level(
+            state,
+            rms_dbfs,
+            peak_dbfs,
+            complete=complete,
+        )
+        self._sync_input_level_controls()
+
+    def _schedule_input_level_poll(self) -> None:
+        if self.input_level_poll_job is None:
+            # Roughly 30 FPS keeps the meter fluid without touching widgets
+            # from the capture thread.
+            self.input_level_poll_job = self.after(33, self._poll_input_level)
+
+    def _poll_input_level(self) -> None:
+        self.input_level_poll_job = None
+        snapshot_getter = getattr(self.controller, "get_input_level", None)
+        if not callable(snapshot_getter):
+            self._schedule_input_level_poll()
+            return
+        try:
+            snapshot = snapshot_getter()
+            rms_dbfs, peak_dbfs, clipping_ratio, is_stale = (
+                self._input_level_snapshot_values(snapshot)
+            )
+            state = self._classify_input_level_values(
+                rms_dbfs,
+                peak_dbfs,
+                clipping_ratio,
+                is_stale=is_stale,
+            )
+
+            if self._input_level_testing:
+                is_test_running = getattr(
+                    self.controller, "is_input_level_test_running", None
+                )
+                if callable(is_test_running) and not is_test_running():
+                    self._stop_input_level_test(show_result=True)
+                else:
+                    # Aggregate speech frames only. Ordinary pauses must not
+                    # pull a useful ten-second result down to "very quiet".
+                    if not is_stale and peak_dbfs >= -55.0:
+                        self._input_level_test_samples.append(
+                            (rms_dbfs, peak_dbfs, clipping_ratio)
+                        )
+                    self._render_input_level(state, rms_dbfs, peak_dbfs)
+            elif self._running:
+                self._render_input_level(state, rms_dbfs, peak_dbfs)
+            elif self._input_level_test_result is not None:
+                result_state, result_rms, result_peak = self._input_level_test_result
+                self._render_input_level(
+                    result_state,
+                    result_rms,
+                    result_peak,
+                    complete=True,
+                )
+            else:
+                self._render_input_level(state, rms_dbfs, peak_dbfs)
+        except Exception as exc:
+            log(f"Input level polling error: {exc}", level="DEBUG")
+        finally:
+            self._schedule_input_level_poll()
+
+    def _cancel_input_level_test_timer(self) -> None:
+        if self.input_level_test_stop_job is not None:
+            try:
+                self.after_cancel(self.input_level_test_stop_job)
+            except Exception:
+                pass
+            self.input_level_test_stop_job = None
+
+    def _aggregate_input_level_test(self) -> tuple[str, float, float]:
+        if not self._input_level_test_samples:
+            return "no_signal", -96.0, -96.0
+        ordered_rms = sorted(sample[0] for sample in self._input_level_test_samples)
+        middle = len(ordered_rms) // 2
+        if len(ordered_rms) % 2:
+            rms_dbfs = ordered_rms[middle]
+        else:
+            rms_dbfs = (ordered_rms[middle - 1] + ordered_rms[middle]) / 2.0
+
+        # The 90th percentile preserves sustained high input but does not let
+        # one short plosive label an otherwise healthy ten-second test "high".
+        ordered_peaks = sorted(sample[1] for sample in self._input_level_test_samples)
+        peak_position = 0.9 * (len(ordered_peaks) - 1)
+        peak_lower = math.floor(peak_position)
+        peak_upper = math.ceil(peak_position)
+        if peak_lower == peak_upper:
+            peak_dbfs = ordered_peaks[peak_lower]
+        else:
+            peak_fraction = peak_position - peak_lower
+            peak_dbfs = ordered_peaks[peak_lower] + peak_fraction * (
+                ordered_peaks[peak_upper] - ordered_peaks[peak_lower]
+            )
+        # Actual clipped samples remain sticky even when they occurred in only
+        # one frame: unlike a harmless peak, that is an actionable defect.
+        clipping_ratio = max(
+            sample[2] for sample in self._input_level_test_samples
+        )
+        state = self._classify_input_level_values(
+            rms_dbfs,
+            peak_dbfs,
+            clipping_ratio,
+            is_stale=False,
+        )
+        return state, rms_dbfs, peak_dbfs
+
+    def _toggle_input_level_test(self) -> None:
+        if self._input_level_testing:
+            self._stop_input_level_test(show_result=True)
+        else:
+            self._start_input_level_test()
+
+    def _start_input_level_test(self) -> None:
+        if self._running:
+            return
+        start_test = getattr(self.controller, "start_input_level_test", None)
+        if not callable(start_test):
+            return
+
+        input_device = self._refresh_selected_device_for_start()
+        if input_device is None:
+            self._alert(
+                self.gui_texts.get("input_level", "Input level"),
+                self.gui_texts.get(
+                    "v3_microphone_open_failed",
+                    "The selected input device could not be opened.",
+                ),
+                parent=self,
+                danger=True,
+            )
+            return
+
+        self._cancel_input_level_test_timer()
+        self._input_level_test_samples.clear()
+        self._input_level_test_result = None
+        reset_level = getattr(self.controller, "reset_input_level", None)
+        if callable(reset_level):
+            reset_level()
+        try:
+            start_test(input_device)
+        except AudioInputError as exc:
+            log(
+                f"Input level test failed: {self._safe_controller_error(exc)}",
+                level="ERROR",
+            )
+            self._alert(
+                self.gui_texts.get("input_level", "Input level"),
+                self.gui_texts.get(
+                    "v3_microphone_open_failed",
+                    "The selected input device could not be opened.",
+                ),
+                parent=self,
+                danger=True,
+            )
+            return
+        except RuntimeError as exc:
+            log(f"Input level test busy: {exc}", level="DEBUG")
+            self._alert(
+                self.gui_texts.get("input_level", "Input level"),
+                self.gui_texts.get(
+                    "input_level_test_busy", "The audio input is already in use."
+                ),
+                parent=self,
+            )
+            return
+        except Exception as exc:
+            log(
+                f"Input level test failed: {self._safe_controller_error(exc)}",
+                level="ERROR",
+            )
+            self._alert(
+                self.gui_texts.get("input_level", "Input level"),
+                self.gui_texts.get(
+                    "v3_microphone_open_failed",
+                    "The selected input device could not be opened.",
+                ),
+                parent=self,
+                danger=True,
+            )
+            return
+
+        self._input_level_testing = True
+        self._render_input_level("no_signal", -96.0, -96.0)
+        self._sync_input_level_controls()
+        self.input_level_test_stop_job = self.after(
+            10_000, lambda: self._stop_input_level_test(show_result=True)
+        )
+
+    def _stop_input_level_test(self, *, show_result: bool) -> None:
+        self._cancel_input_level_test_timer()
+        was_testing = self._input_level_testing
+        self._input_level_testing = False
+        stop_test = getattr(self.controller, "stop_input_level_test", None)
+        if was_testing and callable(stop_test):
+            try:
+                stop_test()
+            except Exception as exc:
+                log(f"Input level test stop error: {exc}", level="DEBUG")
+
+        if show_result and was_testing:
+            self._input_level_test_result = self._aggregate_input_level_test()
+        else:
+            self._input_level_test_result = None
+        self._input_level_test_samples.clear()
+
+        reset_level = getattr(self.controller, "reset_input_level", None)
+        if callable(reset_level):
+            reset_level()
+        self._sync_input_level_controls()
+        if self._input_level_test_result is None:
+            self._render_input_level("no_signal", -96.0, -96.0)
+        else:
+            state, rms_dbfs, peak_dbfs = self._input_level_test_result
+            self._render_input_level(
+                state,
+                rms_dbfs,
+                peak_dbfs,
+                complete=True,
+            )
+
+    def _sync_input_level_controls(self) -> None:
+        if not hasattr(self, "input_level_test_btn"):
+            return
+        if self._running:
+            key = "input_level_live"
+            button_state = "disabled"
+        elif self._input_level_testing:
+            key = "input_level_stop_test"
+            button_state = "normal"
+        else:
+            key = "input_level_test"
+            button_state = (
+                "normal"
+                if callable(getattr(self.controller, "start_input_level_test", None))
+                else "disabled"
+            )
+        self.input_level_test_btn._text_key = key  # type: ignore[attr-defined]
+        self.input_level_test_btn.configure(
+            text=self.gui_texts.get(key, key),
+            state=button_state,
+            fg_color=self._colors["button"],
+            hover_color=self._colors["button_hover"],
+            border_color=self._colors["button_border"],
+            text_color=self._colors["text"],
+            text_color_disabled=self._colors["muted"],
+        )
+        self.device_combo.configure(
+            state="disabled" if self._input_level_testing else "readonly"
+        )
 
     def get_selected_device_index(self) -> int | None:
         idx = self.device_combo.current()
@@ -2953,6 +3477,10 @@ class AppGUI(
         return self.device_loopback_flags[idx]
 
     def _on_device_change(self) -> None:
+        # The preview is bound to the device it opened. A deliberate device
+        # selection ends that preview before the new choice is persisted.
+        if self._input_level_testing:
+            self._stop_input_level_test(show_result=False)
         selection = self.device_combo.current()
         if selection is not None and 0 <= selection < len(self.device_base_names):
             self._saved_settings.input_device_name = self.device_base_names[selection]
@@ -4115,6 +4643,14 @@ class AppGUI(
                 border_color=self._colors["entry_border"],
                 text_color=self._colors["text"],
             )
+        if hasattr(self, "input_level_bar"):
+            self.input_level_bar.set_palette(
+                track_color=self._colors["entry"],
+                border_color=self._colors["recessed_border"],
+                green_color=self._colors["accent"],
+                warning_color=self._colors["warning"],
+                danger_color=self._colors["danger"],
+            )
         # The history/batch windows are rebuilt from scratch on open; close a
         # stale one so it isn't left with old-theme/old-language widgets.
         self._close_history_window()
@@ -4218,6 +4754,7 @@ class AppGUI(
         self._brand_subtitle.configure(text_color=self._colors["brass"])
         self._refresh_main_card_chrome()
         self._refresh_recessed_panel_chrome()
+        self._refresh_input_level_display()
         self._dashboard.apply_theme()
         self._operator_dock.configure(
             fg_color=self._colors["panel"],
@@ -4375,6 +4912,9 @@ class AppGUI(
         self._update_speed_button_states()
         self._refresh_v3_dashboard()
         self._refresh_cost_ui(force=True)
+        # State labels and the Test/Stop/Live caption are dynamic and must be
+        # retranslated after the generic widget registry has run.
+        self._refresh_input_level_display()
 
     def on_close(self) -> None:
         # Silence callback-exception reporting for the rest of this deliberate
@@ -4389,6 +4929,10 @@ class AppGUI(
         try:
             self._saved_settings.window_geometry = self.geometry()
             self._save_current_settings()
+        except Exception:
+            pass
+        try:
+            self._stop_input_level_test(show_result=False)
         except Exception:
             pass
         try:

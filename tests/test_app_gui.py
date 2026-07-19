@@ -77,6 +77,18 @@ class FakeController:
         self.stopped = 0
         self.restarted = 0
         self.last_input_device = None
+        self.level_test_started = 0
+        self.level_test_stopped = 0
+        self.level_test_running = False
+        self.level_resets = 0
+        self.level_snapshot = SimpleNamespace(
+            rms_dbfs=-96.0,
+            peak_dbfs=-96.0,
+            peak_hold_dbfs=-96.0,
+            clipping_ratio=0.0,
+            updated_at=0.0,
+            is_stale=True,
+        )
 
     def start(self, input_device=None):
         self.started += 1
@@ -96,6 +108,24 @@ class FakeController:
 
     def change_input_device(self, idx):
         return True
+
+    def get_input_level(self):
+        return self.level_snapshot
+
+    def reset_input_level(self):
+        self.level_resets += 1
+
+    def start_input_level_test(self, input_device=None):
+        self.level_test_started += 1
+        self.level_test_running = True
+        self.last_input_device = input_device
+
+    def stop_input_level_test(self):
+        self.level_test_stopped += 1
+        self.level_test_running = False
+
+    def is_input_level_test_running(self):
+        return self.level_test_running
 
 
 @pytest.fixture
@@ -286,12 +316,79 @@ class TestStartup:
 
         assert gui.device_combo.cget("border_width") == 2
         assert gui.speed_decrease_btn.cget("border_width") == 1
-        assert len(gui._recessed_panel_styles) == 5
+        assert len(gui._recessed_panel_styles) == 6
         for style in gui._recessed_panel_styles:
             assert style["panel"].cget("fg_color") == gui._colors["recessed"]
             assert style["panel"].cget("border_color") == gui._colors[
                 "recessed_border"
             ]
+
+
+class TestInputLevel:
+    def test_states_keep_silence_neutral_and_report_real_clipping(self, make_gui):
+        gui, _controller, _settings = make_gui()
+
+        assert gui.input_level_panel.master is gui.device_combo.master
+        assert gui.input_level_test_btn.cget("state") == "normal"
+        classify = gui._classify_input_level_values
+        assert classify(-18.0, -2.0, 0.0, is_stale=True) == "no_signal"
+        assert classify(-70.0, -65.0, 0.0, is_stale=False) == "no_signal"
+        assert classify(-42.0, -18.0, 0.0, is_stale=False) == "quiet"
+        assert classify(-20.0, -8.0, 0.0, is_stale=False) == "good"
+        assert classify(-18.0, -2.0, 0.0, is_stale=False) == "high"
+        assert classify(-18.0, -5.0, 0.001, is_stale=False) == "clipping"
+
+        gui._render_input_level("good", -20.0, -8.0)
+        assert gui.input_level_state_label.cget("text") == gui.gui_texts[
+            "input_level_good"
+        ]
+        assert gui.input_level_value_label.cget("text") == "-20.0 dBFS"
+        assert gui.input_level_bar.get() > 0
+        green, warning, danger = gui.input_level_bar.segment_values
+        assert green > 0
+        assert warning == pytest.approx(0.0)
+        assert danger == pytest.approx(0.0)
+
+        gui._render_input_level("high", -8.0, -2.0)
+        assert gui.input_level_state_label.cget("text_color") == gui._colors["danger"]
+        assert gui.input_level_bar.segment_values[2] > 0
+
+    def test_local_test_result_and_live_handoff_use_one_audio_owner(self, make_gui):
+        gui, controller, _settings = make_gui()
+
+        gui._start_input_level_test()
+        assert controller.level_test_started == 1
+        assert controller.started == 0  # no provider/session/network pipeline
+        assert controller.last_input_device == 7
+        assert gui._input_level_testing is True
+        assert gui.input_level_test_btn.cget("text") == gui.gui_texts[
+            "input_level_stop_test"
+        ]
+        assert gui.device_combo._enabled is False
+
+        # One short plosive does not condemn an otherwise healthy ten-second
+        # sample; clipping itself remains separately sticky via its ratio.
+        gui._input_level_test_samples = [(-20.0, -12.0, 0.0)] * 9 + [
+            (-20.0, 0.0, 0.0)
+        ]
+        gui._stop_input_level_test(show_result=True)
+        assert gui._input_level_test_result is not None
+        assert gui._input_level_test_result[0] == "good"
+        assert gui.input_level_bar.get() == pytest.approx(0.0)
+        assert gui.gui_texts["input_level_test_complete"] in (
+            gui.input_level_hint_label.cget("text")
+        )
+
+        gui._start_input_level_test()
+        gui.on_start()
+        assert controller.level_test_stopped == 2
+        assert controller.started == 1
+        assert gui._input_level_testing is False
+        assert gui.input_level_test_btn.cget("state") == "disabled"
+        assert gui.input_level_test_btn.cget("text") == gui.gui_texts[
+            "input_level_live"
+        ]
+        gui.on_stop()
 
 
 class TestProviderSelection:
